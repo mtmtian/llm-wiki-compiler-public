@@ -1,8 +1,8 @@
 # llmwiki
 
-> This repository contains self-maintained llmwiki code and general deployment tooling. Keep project mappings, machine identity, Wiki content, transcripts, credentials, and runtime state outside Git. The committed deployment template is neutral and defaults to reader mode; pass a private full configuration with `--config-source` when installing. See the [deployment guide](deployment/README.md) for details. The product overview below describes llmwiki itself.
+> 本仓库是 llmwiki 的自维护公开源码，维护分支为 `personal/stable`。已有设备先按[仓库切换指南](deployment/PUBLIC-REPOSITORY.md)接入；项目映射、机器身份、Wiki、会话和凭据继续保存在仓库外。公开模板默认 reader，部署时通过 `--config-source` 使用私有完整配置。下方 npm 安装说明对应上游发布包；使用本仓库扩展时请从源码构建。
 
-[![CI](https://img.shields.io/github/actions/workflow/status/atomicstrata/llm-wiki-compiler/ci.yml?branch=main&logo=github&label=CI)](https://github.com/atomicstrata/llm-wiki-compiler/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/mtmtian/llm-wiki-compiler-public/ci.yml?branch=personal%2Fstable&logo=github&label=CI)](https://github.com/mtmtian/llm-wiki-compiler-public/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/llm-wiki-compiler?logo=npm&label=npm)](https://www.npmjs.com/package/llm-wiki-compiler)
 [![docs](https://img.shields.io/badge/docs-llmwiki.atomicstrata.ai-blue)](https://llmwiki.atomicstrata.ai)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
