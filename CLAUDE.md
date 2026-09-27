@@ -54,6 +54,8 @@ from a green check.
 
 ## General Rules
 
+- This is a public repository. Code, docs, test fixtures, commit messages, PR titles and bodies, and review records must not contain private business information: real business project names or paths, real machine IDs, host metrics or runtime snapshots, user decisions, or business goals. Use neutral or synthetic examples and write "no baseline provided" instead of real numbers; real data stays in private host state outside Git. Check the diff and PR text for it before pushing. See [deployment/PUBLIC-REPOSITORY.md](deployment/PUBLIC-REPOSITORY.md).
+
 - Wiki extraction and curation follow [KNOWLEDGE-POLICY.md](KNOWLEDGE-POLICY.md): retain durable knowledge and necessary evidence, and retire reviewed redundant process records without creating history archives.
 
 - First think through the problem, read the codebase for relevant files.
