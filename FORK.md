@@ -98,14 +98,19 @@ compatibility with unowned files.
 
 ## Integrating an upstream release
 
-Start with a clean working tree. Fetch upstream tags, choose a reviewed release,
-and create an integration branch from the repository's maintained branch:
+The public repository starts from an independent source snapshot. It does not
+share Git ancestry with the upstream repository or any earlier private checkout.
+The upstream source baseline is release `v1.3.0`, commit
+`34ca1df97b3e60a6700048c48c7cf70c92a9bfdb`. Preserve the upstream license and
+attribution. Review changes between that public baseline and a selected upstream
+release, then port the needed changes on an integration branch:
 
 ```sh
 git fetch upstream --tags
-git switch "$MAINTAINED_BRANCH"
+git switch personal/stable
 git switch -c integration/upstream-VERSION
-git merge --no-edit UPSTREAM_RELEASE_TAG
+git diff v1.3.0 UPSTREAM_RELEASE_TAG --stat
+# Review and port the selected upstream changes before running these checks.
 npm ci --ignore-scripts
 npx tsc --noEmit
 npm run build
@@ -115,12 +120,13 @@ python3 -m unittest discover -s extensions/knowledge-flow -p 'test_*.py'
 npx fallow
 ```
 
-Set `MAINTAINED_BRANCH` to the configured branch and replace the version
-placeholders. Inspect upstream changes to data formats, review policy, provider
-arguments, and retrieval before merging. The test suite includes a real Codex
-smoke test when the CLI is installed. That upstream test uses the CLI default
-model; also test structured output with the model used by the local wiki before
-switching its runtime.
+Replace the version placeholders. Update this baseline after a reviewed upstream
+integration. Inspect changes to data formats, review policy, provider arguments,
+and retrieval. Import source changes through PRs; importing old private branches
+or merging unrelated histories would also import their historical contents.
+Real Codex smoke tests require the explicit `RUN_CODEX_LIVE_SMOKE=1` opt-in;
+before a runtime upgrade, separately verify structured output with the host's
+configured model when that live validation is authorized.
 
 Resolve conflicts by behavior, not by retaining one side wholesale. Remove
 patches now covered upstream. Test on a disposable copy of a wiki, including
