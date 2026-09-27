@@ -1,0 +1,30 @@
+.env
+node_modules/
+dist/
+test-results/
+.llmwiki/
+.llm-wiki/
+/wiki/
+/sources/
+/log.md
+*.tmp
+.DS_Store
+localdocs/
+.fallow/
+.worktrees/
+.sisyphus/
+.claude/
+# Local demo/test wiki workspaces (e.g. my-wiki/). The product output dirs
+# /wiki/ and /sources/ above are root-anchored, so a nested workspace's
+# my-wiki/wiki/ and my-wiki/sources/ would otherwise be tracked.
+*-wiki/
+docs/superpowers/
+# Machine-generated configuration and Python caches are not portable policy.
+__pycache__/
+*.pyc
+deployment/*.local.json
+deployment/*.private.json
+deployment/machines/*.json
+!deployment/machines/*.example.json
+.env.*
+!.env.example

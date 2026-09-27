@@ -1,0 +1,102 @@
+/**
+ * llmwiki viewer — knowledge graph styling.
+ *
+ * D3 assigns semantic classes; every colour lives here. That split is what
+ * lets the graph follow the theme: SVG presentation attributes cannot read
+ * CSS custom properties, so a graph coloured by `.attr('fill', …)` would
+ * stay dark when the viewer switches to light.
+ *
+ * Node geometry (radius, stroke width, dash pattern) stays in JS because it
+ * is derived from node degree, not from the theme.
+ *
+ * `.graph-pane` carries the pane's sizing rules. `viewer.js` sets
+ * `className = "main-pane graph-pane"`, so this rule shares its element
+ * with `.main-pane` (viewer-content.css), whose `width: min(100%, 72ch)`
+ * caps prose width; same specificity, later in the cascade (this sheet
+ * loads last), so `width: 100%` here wins back the full pane for the
+ * graph canvas. `.dashboard` and `.list-pane` override the same rule the
+ * same way, for their own routes.
+ */
+
+.graph-pane {
+  position: relative;
+  width: 100%;
+  min-height: 70vh;
+  padding: 0;
+  overflow: hidden;
+}
+.graph-pane svg { display: block; width: 100%; height: 100%; }
+
+/* Four semantics, per the design system: concept, entity, stale, dangling. */
+.graph-node { transition: opacity 120ms ease; }
+.graph-node--concept  { fill: var(--accent-text); stroke: var(--accent-text); }
+.graph-node--entity   { fill: var(--ok);          stroke: var(--ok); }
+.graph-node--stale    { fill: var(--warn);        stroke: var(--warn); }
+.graph-node--dangling { fill: none;               stroke: var(--danger); }
+
+.graph-node.is-dimmed { opacity: 0.25; }
+/* The focused node takes the solid interactive violet, not the text violet. */
+.graph-node.is-hot { opacity: 1; fill: var(--accent); stroke: var(--accent); }
+
+/* Halo ring around the focused node. Invisible at rest. */
+.graph-halo {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  stroke-opacity: 0;
+  transition: stroke-opacity 120ms ease;
+}
+.graph-halo.is-hot { stroke-opacity: 0.35; }
+
+.graph-edge {
+  stroke: var(--graph-edge);
+  stroke-width: 1.2;
+  stroke-opacity: 0.7;
+}
+.graph-edge--relation { stroke-dasharray: 5 3; stroke-width: 1.5; }
+.graph-edge.is-dimmed { stroke-opacity: 0.2; }
+.graph-edge.is-hot { stroke: var(--graph-edge-hot); stroke-opacity: 1; stroke-width: 2; }
+
+.graph-arrowhead { fill: var(--graph-edge); }
+
+.graph-legend {
+  position: absolute; top: 14px; right: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-card);
+  font: 500 10px/1.8 var(--font-mono);
+  color: var(--fg-muted);
+}
+.graph-legend-heading {
+  color: var(--fg-ghost);
+  letter-spacing: 0.1em;
+  margin-top: 8px;
+}
+.graph-legend-heading:first-child { margin-top: 0; }
+.graph-legend-item { display: flex; align-items: center; gap: 6px; }
+.graph-legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+.graph-legend-dot--concept  { background: var(--accent-text); border: 1px solid var(--accent-text); }
+.graph-legend-dot--entity   { background: var(--ok);          border: 1px solid var(--ok); }
+.graph-legend-dot--stale    { background: var(--warn);        border: 1px solid var(--warn); }
+.graph-legend-dot--dangling { background: transparent;        border: 1px dashed var(--danger); }
+.graph-legend-dot--relation { background: transparent;        border: 1px dashed var(--graph-edge-hot); }
+
+.graph-tooltip {
+  position: absolute;
+  display: none;
+  max-width: 240px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-card);
+  pointer-events: none;
+  z-index: 5;
+}
+.tip-title { font: 500 12px/1.3 var(--font-sans); color: var(--fg-strong); }
+.tip-meta  { font: 400 10.5px/1.4 var(--font-mono); color: var(--fg-dim); margin-top: 3px; }
+.tip-hint  { font: 400 10px/1.4 var(--font-mono); color: var(--fg-ghost); margin-top: 5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-node { transition: none; }
+}

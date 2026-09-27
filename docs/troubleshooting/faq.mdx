@@ -1,0 +1,270 @@
+---
+title: "llmwiki FAQ - Frequently Asked Questions and Answers"
+sidebarTitle: "FAQ"
+description: "Answers to common llmwiki questions: provider setup, compilation errors, query quality, Obsidian compatibility, and scale considerations."
+---
+
+Whether you're hitting your first `ProviderUnavailableError` or fine-tuning a large corpus workflow, this page covers the questions that come up most often. Each answer links out to deeper reference pages where relevant. If your question isn't here, check the [GitHub Issues](https://github.com/atomicstrata/llm-wiki-compiler/issues) tracker - it's the best place to surface new problems and search prior reports.
+
+<AccordionGroup>
+
+<Accordion title="What Node.js version does llmwiki require?">
+llmwiki requires **Node.js >= 24**. This minimum was established in v0.5.0 to support modern test-mocking APIs and ESM features used throughout the compiler.
+
+Check your version before installing:
+
+```bash
+node --version
+# v24.x.x  ✓
+```
+
+If you're on an older Node release, pin to `llm-wiki-compiler@<0.5.0` until you can upgrade your runtime. Earlier versions supported Node 18 and above.
+</Accordion>
+
+<Accordion title="I get 'ProviderUnavailableError' when running compile. What does this mean?">
+`ProviderUnavailableError` means llmwiki could not find valid LLM credentials for the active provider. No compilation calls were made and nothing was written.
+
+The most common cause is a missing or misconfigured API key. For the default Anthropic provider, set one of:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+# or, for compatible gateways:
+export ANTHROPIC_AUTH_TOKEN=...
+```
+
+llmwiki also reads credentials from `~/.claude/settings.json` (the `env` block) as a fallback, so if you already have Claude Code configured locally, a bare `llmwiki compile` should work with no exports at all.
+
+To see all accepted provider environment variables:
+
+```bash
+llmwiki --help
+```
+
+If you don't have an Anthropic API key, see the next question for keyless alternatives.
+</Accordion>
+
+<Accordion title="Can I use llmwiki without an Anthropic API key?">
+Yes. llmwiki supports four keyless or non-Anthropic providers:
+
+| Provider | How to activate | Notes |
+|---|---|---|
+| `claude-agent` | `LLMWIKI_PROVIDER=claude-agent` | Uses your local Claude Code login (OAuth/subscription). No `ANTHROPIC_API_KEY` needed - if `claude` runs in your terminal, this works. |
+| `codex-agent` | `LLMWIKI_PROVIDER=codex-agent` | Uses the installed Codex CLI and its local ChatGPT login. Requires an explicit existing embedding provider; pair with `ollama` for a keyless setup. |
+| `ollama` | `LLMWIKI_PROVIDER=ollama` | Runs entirely against a local Ollama instance. Set `LLMWIKI_MODEL` and `OLLAMA_HOST`. |
+| `copilot` | `LLMWIKI_PROVIDER=copilot` | Uses your GitHub Copilot subscription. Requires an OAuth token with the `copilot` scope (`gh auth refresh --scopes copilot`). Classic PATs are not supported. |
+
+Example using the Claude Agent provider:
+
+```bash
+export LLMWIKI_PROVIDER=claude-agent
+llmwiki compile
+```
+
+Review the [provider terms of service](https://www.anthropic.com/legal/consumer-terms) that apply to your account type before using `claude-agent` for automated compilation workloads.
+
+For Codex, run `codex login`, set `LLMWIKI_PROVIDER=codex-agent`, and set
+`LLMWIKI_EMBEDDING_PROVIDER`. A missing binary or unusable login fails with a
+Codex-specific error and never falls back to an API key.
+
+Codex Agent requires a compatible Codex CLI; the minimum verified version is
+0.152.1. Update with `npm install -g @openai/codex@latest` if llmwiki reports
+that the installed CLI does not support its required secure flags. Export Codex
+Agent and embedding settings in the shell: explicit Codex selection bypasses
+the project `.env` file so llmwiki never opens a file that may contain API keys.
+</Accordion>
+
+<Accordion title="How do I switch providers mid-project?">
+Set `LLMWIKI_PROVIDER` (and any required credentials for the new provider) and re-run compile. llmwiki's incremental hash-based change detection means **only sources whose content has changed since the last compile are sent through the LLM pipeline again** - your existing pages are not lost or regenerated wholesale.
+
+```bash
+# Switch from Anthropic to Ollama
+export LLMWIKI_PROVIDER=ollama
+export LLMWIKI_MODEL=llama3.1
+export OLLAMA_HOST=http://localhost:11434/v1
+llmwiki compile
+```
+
+Keep in mind that different providers use different models, so regenerated pages may differ stylistically from those produced by the previous provider.
+</Accordion>
+
+<Accordion title="Why does compile take a long time?">
+The first compile must run every source through the two-phase LLM pipeline (concept extraction → page generation). For a large corpus, this is expected to take a while.
+
+**Subsequent compiles are incremental.** Hash-based change detection skips any source whose content hasn't changed since the last compile. Re-running on an unchanged corpus typically takes only a few seconds.
+
+If the first compile is still slower than expected, consider:
+
+- **Switching to a faster model:** set `LLMWIKI_MODEL` to a faster variant for your provider (e.g. a smaller Anthropic or Ollama model).
+- **Checking per-concept truncation warnings:** if many sources discuss the same topic, the prompt budget cap may be firing. Review stderr for truncation warnings and adjust `LLMWIKI_PROMPT_BUDGET_CHARS` if needed.
+- **Starting smaller:** use `llmwiki quickstart <source>` to ingest and compile a single source first, then add the rest incrementally.
+</Accordion>
+
+<Accordion title="The query isn't finding relevant pages - what can I do?">
+`llmwiki query` uses a hybrid retrieval stack: semantic chunk embeddings narrow the candidate set, BM25 reranks it, and wikilink-graph expansion adds neighbors. If semantic retrieval isn't working, results fall back to lexical (full-index BM25) selection.
+
+Check whether an embedding store exists:
+
+```bash
+find .llmwiki -maxdepth 1 -name 'embeddings.*' -type f -print
+```
+
+Look for `embeddings.bin` or `embeddings.json`. Binary takes precedence when both exist. File presence alone does not prove the index is usable: `embedding-store-unavailable` means it could not be loaded. See [storage recovery and limits](/configuration/environment-variables#embedding-storage).
+
+If both are missing, embeddings haven't been built yet (they are created during `compile` when the provider supports them). Possible causes:
+
+- **No embedding support on the active provider.** The `copilot` and `claude-agent` providers do not expose embedding endpoints. For `claude-agent`, set `VOYAGE_API_KEY` to enable semantic retrieval; for `copilot`, switch to the `openai` provider and supply `OPENAI_API_KEY`.
+- **Freshly initialized project.** Run `llmwiki compile` at least once to build both pages and embeddings.
+
+You can also run the eval harness to see your wiki's overall health score and identify gaps:
+
+```bash
+llmwiki eval
+```
+</Accordion>
+
+<Accordion title="Can I use llmwiki with Obsidian?">
+Yes. The `wiki/` directory produced by llmwiki is Obsidian-compatible by design.
+
+- **`[[wikilinks]]`** are generated in slug-based form (`[[slug|Display Title]]`) so Obsidian resolves the file directly, even when the display title differs from the slug.
+- **Alias-aware resolution:** a `[[term]]` link resolves to any page that declares `term` in its `aliases` frontmatter, not just the page whose slug matches. This means links survive renames and synonyms - rename a page and declare the old name as an alias, and all existing links continue to work.
+- **Tags and Map of Content:** compiled pages carry LLM-extracted tags, and `wiki/MOC.md` groups concept pages by tag for Obsidian's graph view.
+
+Simply open `wiki/` (or the project root) as an Obsidian vault.
+</Accordion>
+
+<Accordion title="How do I add sources in a different language?">
+Use the `--lang` flag on `compile` to generate wiki content in a specific language:
+
+```bash
+llmwiki compile --lang zh-CN
+llmwiki compile --lang Japanese
+llmwiki compile --lang ja
+```
+
+To apply the setting permanently for a project, set the environment variable instead:
+
+```bash
+export LLMWIKI_OUTPUT_LANG=zh-CN
+llmwiki compile
+```
+
+The `--lang` flag wins over `LLMWIKI_OUTPUT_LANG` when both are set. The flag also works on `llmwiki query` to generate answers in the specified language. Unset, llmwiki produces output in whatever language the model derives naturally from your source material (typically English).
+</Accordion>
+
+<Accordion title="What happens if I delete a source file from sources/?">
+When a source file is deleted, any wiki pages that were produced exclusively from that source become **orphaned** - their source is gone and they can no longer be updated. Pages that had multiple contributing sources are marked **stale** if at least one owner is still present.
+
+llmwiki detects this automatically by comparing the hashes recorded in `.llmwiki/state.json` against the current state of `sources/` on disk. No recompile is needed to detect it.
+
+To see which pages are affected:
+
+```bash
+llmwiki lint
+```
+
+To clean up orphaned pages and recompile stale ones:
+
+```bash
+llmwiki refresh --stale
+```
+
+For a preview with no LLM calls or writes:
+
+```bash
+llmwiki refresh --stale --dry-run
+```
+
+See [Detecting and Repairing Stale Pages](/troubleshooting/stale-pages) for the full repair workflow.
+</Accordion>
+
+<Accordion title="How many sources can llmwiki handle?">
+The scale story has matured well past a few dozen sources. Several mechanisms keep large corpora manageable:
+
+- **Semantic chunk retrieval** (the v3 JSON or binary index) narrows hundreds of pages down to a small top-K via cosine similarity before any LLM selection, with BM25 reranking on top. Large stores automatically use binary storage to avoid the JSON size limit; [binary limits](/configuration/environment-variables#embedding-storage) still depend on dimensions and text size, and retrieval loads the index into memory.
+- **Incremental compilation** means only changed sources re-run. Re-running on an unchanged large corpus takes seconds.
+- **Per-concept prompt budget** (`LLMWIKI_PROMPT_BUDGET_CHARS`, default `200000`) prevents popular shared concepts from exhausting the model's context window. Each contributing source gets a fair share when the cap fires, with a truncation warning to stderr.
+
+If you're compiling a very large corpus and hitting context-window limits on popular concepts, raise the budget for a model with a larger context window:
+
+```bash
+export LLMWIKI_PROMPT_BUDGET_CHARS=400000
+llmwiki compile
+```
+
+Lexical fallback kicks in automatically when no embedding store is present, so even before embeddings are built, query still works - just without semantic ranking.
+</Accordion>
+
+<Accordion title="The viewer won't open on a remote server - how do I access it?">
+By default, `llmwiki view` binds to `127.0.0.1` (loopback only). This is intentional - the viewer renders your local source files and wiki pages, and exposing it on a network interface requires an explicit opt-in.
+
+To allow access from another machine on your local network, you must provide **both** flags together:
+
+```bash
+llmwiki view --host 0.0.0.0 --allow-lan
+```
+
+<Warning>
+Be thoughtful about what you expose. The viewer path-confines all file reads to `wiki/` and `sources/`, but any machine that can reach the port can browse your compiled wiki and (with source windows enabled) your raw ingested sources. Use this only on trusted networks.
+</Warning>
+
+Wildcard hosts are accepted, but `--allow-lan` acts as an explicit acknowledgment that you intend to expose the server beyond loopback. Omitting either flag causes the server to fall back to `127.0.0.1`.
+</Accordion>
+
+<Accordion title="How do I gate CI on wiki quality?">
+Create `.llmwiki/eval/thresholds.yaml` in your project with your minimum acceptable scores:
+
+```yaml
+health_score: 85
+citation_coverage_percent: 70
+citation_precision_percent: 90
+citation_support_mean: 1.4   # only checked when --suite full is used
+source_utilization_rate: 0.9
+source_warnings_max: 0
+claim_level_citation_rate: 0.5
+```
+
+Then add `llmwiki eval` to your CI pipeline. It exits non-zero when any threshold is violated and lists the violations in the report:
+
+```bash
+llmwiki eval
+# Exit code 0 = all thresholds passed
+# Exit code 1 = one or more thresholds breached
+```
+
+For the full LLM-as-judge citation support check (which sends citation samples to your provider), use `--suite full`. The fast suite (no API key required) covers health score, citation coverage, citation precision, and corpus stats.
+
+For a deeper walkthrough of CI threshold configuration, see [/guides/ci-quality-gates](/guides/ci-quality-gates).
+</Accordion>
+
+<Accordion title="What's the difference between llmwiki query and llmwiki context?">
+They serve different downstream use cases:
+
+| Command | What it does |
+|---|---|
+| `llmwiki query "question"` | Runs the full retrieval pipeline and then **generates a grounded natural-language answer** using an LLM. Optionally saves the answer as a wiki page with `--save`. Requires provider credentials. |
+| `llmwiki context "prompt"` | Builds and returns an **evidence pack** - primary pages, semantic chunk hits, graph neighbors, citations, warnings, and suggested actions - but **does not generate an answer**. The pack is ready for you or an agent to reason over directly. Falls back to lexical retrieval when no embeddings exist. |
+
+Use `llmwiki query` when you want a direct answer. Use `llmwiki context` (or MCP `get_context_pack`) when you want to supply structured evidence to an agent or build your own reasoning layer on top.
+
+Both commands expose a `--json` flag for machine-readable output.
+</Accordion>
+
+<Accordion title="Can I run llmwiki in watch mode to auto-recompile?">
+Yes. `llmwiki watch` monitors your `sources/` directory and automatically triggers an incremental recompile whenever a file changes:
+
+```bash
+llmwiki watch
+```
+
+Watch mode uses the same hash-based change detection as `llmwiki compile`, so only the files that actually changed are sent through the LLM pipeline. It's useful during active research or writing sessions where you're frequently updating or adding source files.
+
+<Tip>
+Running `llmwiki watch` continuously prevents stale pages from accumulating - each source edit is recompiled immediately rather than discovered later by `llmwiki lint`. See [Detecting and Repairing Stale Pages](/troubleshooting/stale-pages) for more on the stale-page lifecycle.
+</Tip>
+</Accordion>
+
+</AccordionGroup>
+
+<Note>
+Didn't find what you were looking for? Check the [GitHub Issues tracker](https://github.com/atomicstrata/llm-wiki-compiler/issues) to search prior bug reports and questions, or open a new issue with a clear reproduction case. Include your Node version, provider, and any relevant stderr output.
+</Note>

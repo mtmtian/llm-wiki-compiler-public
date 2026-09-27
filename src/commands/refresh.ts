@@ -1,0 +1,207 @@
+/**
+ * Commander action for `llmwiki refresh --stale [--dry-run]`. Resolves the set of
+ * stale/orphaned pages, then either prints the plan (dry-run, no LLM/writes) or
+ * delegates a scoped recompile to the compile pipeline via CompileOptions.
+ * Repairs stale compiled knowledge; deliberately skips unrelated new sources.
+ */
+
+import { compileAndReport } from "../compiler/index.js";
+import { countCandidates } from "../compiler/candidates.js";
+import {
+  resolveStaleRefresh,
+  type RefreshPlan,
+  type RefreshStateStatus,
+} from "../compiler/refresh-plan.js";
+import * as output from "../utils/output.js";
+import type { CompileResult } from "../utils/types.js";
+
+interface RefreshCommandOptions {
+  stale?: boolean;
+  dryRun?: boolean;
+  /** Max concurrent LLM calls during the scoped recompile (forwarded to CompileOptions). */
+  concurrency?: number;
+}
+
+/** Pairs of [items, label, icon] for plan detail lines — data-driven to keep cyclomatic low. */
+type PlanDetailRow = [items: string[], label: string, icon: string];
+
+/**
+ * Run the refresh command. Resolves the stale-refresh plan and either prints
+ * it (--dry-run) or delegates a scoped recompile to the compile pipeline.
+ * @param options - CLI options forwarded by Commander.
+ * @param ensureProvider - Optional provider guard, invoked only on the live
+ *   recompile path (never for dry-run or any early-exit path) so dry-run works
+ *   with no API key configured.
+ * @returns Exit code: 0 for success, 1 for usage/corrupt-state errors.
+ */
+export default async function refreshCommand(
+  options: RefreshCommandOptions = {},
+  ensureProvider?: () => void,
+): Promise<number> {
+  if (!options.stale) {
+    output.status("!", output.warn("Usage: llmwiki refresh --stale [--dry-run]"));
+    return 1;
+  }
+  const root = process.cwd();
+  const { stateStatus, plan } = await resolveStaleRefresh(root);
+  const stateExit = checkStateStatus(stateStatus);
+  if (stateExit !== null) return stateExit;
+  // The "ok" branch always carries a plan; this guard narrows the type
+  // (and is defensive) so the live path below needs no non-null assertions.
+  if (!plan) return 1;
+  return runRefresh(root, plan, options, ensureProvider);
+}
+
+/**
+ * Execute the scoped recompile after all pre-work guards have passed. Returns
+ * early when nothing is stale. The provider guard fires only here on the live
+ * path — never for dry-run — so `refresh --stale --dry-run` succeeds with no
+ * API key configured.
+ */
+async function runRefresh(
+  root: string,
+  plan: RefreshPlan,
+  options: RefreshCommandOptions,
+  ensureProvider?: () => void,
+): Promise<number> {
+  if (!hasWork(plan)) {
+    output.status("✓", output.success("Wiki is up to date — nothing to refresh."));
+    return 0;
+  }
+  printPlan(plan);
+  if (options.dryRun) {
+    output.status("i", output.dim("Dry run — no files changed, no LLM calls made."));
+    return 0;
+  }
+  await warnOnReviewBypass(root);
+  maybeEnsureProvider(plan, ensureProvider);
+  const result = await compileAndReport(root, {
+    changeFilter: plan.changeFilter,
+    skipSeedPages: true,
+    concurrency: options.concurrency,
+  });
+  return reportCompileOutcome(result, plan);
+}
+
+/**
+ * Warn that pending candidates exist when the project uses a review policy.
+ * Refresh respects the project review policy — pages tripping policy are held
+ * for review rather than written directly. Advisory only — never blocks the recompile.
+ */
+async function warnOnReviewBypass(root: string): Promise<void> {
+  const pending = await countCandidates(root);
+  if (pending > 0) {
+    output.status("!", output.warn(
+      `${pending} pending review candidate(s) exist — refresh respects the project review policy; pages tripping policy are held for review, not written directly.`,
+    ));
+  }
+}
+
+/**
+ * Surface the compile result: print any pipeline errors and exit 1 on failure
+ * (lock contention, extraction/validation errors), or a one-line success
+ * summary and exit 0. Without this, refresh swallowed errors and always exited 0.
+ * When a review policy held pages, those are reported separately as held — only
+ * pages actually written live are counted as "refreshed".
+ */
+function reportCompileOutcome(result: CompileResult, plan: RefreshPlan): number {
+  if (result.errors.length > 0) {
+    for (const e of result.errors) output.status("✗", output.error(e));
+    reportNewSkipped(plan.newSkipped);
+    return 1;
+  }
+  const heldCount = (result.review?.held.length ?? 0) + (result.review?.forced.length ?? 0);
+  const liveRefreshed = plan.recompiledPages.length - heldCount;
+  const orphanedCount = plan.computedOrphanedPages.length;
+  output.status("✓", output.success(buildRefreshSummary(liveRefreshed, heldCount, orphanedCount)));
+  reportNewSkipped(plan.newSkipped);
+  return 0;
+}
+
+/**
+ * Build the human-readable refresh summary line. Separates live-written pages
+ * from held candidates so the user is never told a page was "refreshed" when
+ * the review policy held it for human review instead.
+ */
+function buildRefreshSummary(liveRefreshed: number, heldCount: number, orphanedCount: number): string {
+  const parts: string[] = [];
+  if (liveRefreshed > 0 || heldCount === 0) {
+    parts.push(`Refreshed ${liveRefreshed} page(s)`);
+  }
+  if (heldCount > 0) {
+    parts.push(`held ${heldCount} for review — run \`llmwiki review list\``);
+  }
+  parts.push(`cleaned up ${orphanedCount} orphaned page(s)`);
+  return parts.join("; ");
+}
+
+/**
+ * Invoke the provider guard only when the plan will trigger an LLM extraction.
+ * Concept extraction runs for changed owners and their known-affected
+ * co-contributors. A deleted owner can contribute knownAffected survivors
+ * because partial-deletion pages are rebuilt from live evidence.
+ */
+function maybeEnsureProvider(plan: RefreshPlan, ensureProvider?: () => void): void {
+  const needsLLM = plan.changedOwners.length > 0 || plan.knownAffected.length > 0;
+  if (needsLLM) ensureProvider?.();
+}
+
+/**
+ * Return 1 for corrupt state, 0 for missing state, null to proceed.
+ * Kept separate so refreshCommand's cyclomatic stays below threshold.
+ */
+function checkStateStatus(stateStatus: RefreshStateStatus): number | null {
+  if (stateStatus === "corrupt") {
+    output.status("✗", output.error(".llmwiki/state.json is unreadable — run `llmwiki compile` to rebuild it."));
+    return 1;
+  }
+  if (stateStatus === "missing") {
+    output.status("i", output.dim("No compiled wiki yet — run `llmwiki compile`."));
+    return 0;
+  }
+  return null;
+}
+
+/** Emit the "new sources skipped" hint when the plan identified any. */
+function reportNewSkipped(newSkipped: string[]): void {
+  if (newSkipped.length === 0) return;
+  output.status("i", output.dim(
+    `${newSkipped.length} new source(s) skipped — run \`llmwiki compile\` to include new content.`,
+  ));
+}
+
+/** Print the plan summary line and all non-empty category detail lines. */
+function printPlan(plan: RefreshPlan): void {
+  const modelSources = plan.changedOwners.length + plan.knownAffected.length;
+  output.status("~", output.info(
+    `Recompiling ${plan.recompiledPages.length} page(s) from ${modelSources} source(s) ` +
+    `(${plan.changedOwners.length} changed + ${plan.knownAffected.length} known affected; more may be found during the run); ` +
+    `cleaning up ${plan.computedOrphanedPages.length} orphaned page(s).`,
+  ));
+  for (const [items, label, icon] of planDetailRows(plan)) {
+    if (items.length > 0) output.status(icon, output.dim(`${label}: ${items.join(", ")}`));
+  }
+}
+
+/**
+ * True when the plan has any actionable work: pages to recompile, orphaned
+ * pages to clean up, or a legacy sharedKeptPages entry.
+ */
+function hasWork(plan: RefreshPlan): boolean {
+  return (
+    plan.recompiledPages.length > 0 ||
+    plan.sharedKeptPages.length > 0 ||
+    plan.computedOrphanedPages.length > 0
+  );
+}
+
+/** Data-driven detail rows for the plan: [items, label, icon]. Keeps printPlan cyclomatic low. */
+function planDetailRows(plan: RefreshPlan): PlanDetailRow[] {
+  return [
+    [plan.recompiledPages, "recompiled", "~"],
+    [plan.computedOrphanedPages, "cleaned up (orphaned)", "⚠"],
+    [plan.alreadyOrphanedPages, "already orphaned — no action", "i"],
+    [plan.knownAffected, "known affected sources (more may be found during the run)", "~"],
+    [plan.newSkipped, "new sources skipped", "i"],
+  ];
+}

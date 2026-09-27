@@ -1,0 +1,363 @@
+---
+title: "llmwiki Environment Variables: Full Reference Guide"
+sidebarTitle: "Environment Variables"
+description: "Complete reference for all llmwiki environment variables: provider selection, API keys, model overrides, timeouts, output language, and debug flags."
+---
+
+llmwiki reads configuration from environment variables and an optional `.env` file placed in your project directory (alongside `sources/` and `wiki/`). Variables set in your shell take precedence over those in `.env`, which in turn take precedence over the Claude Code settings fallback (`~/.claude/settings.json` → `env` block) and built-in defaults.
+
+You don't need to set everything - only the variables relevant to your chosen provider are required. Most projects need only two or three exports before running `llmwiki compile`.
+
+---
+
+## Provider selection
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLMWIKI_PROVIDER` | `anthropic` | Provider to use. One of: `anthropic`, `openai`, `ollama`, `minimax`, `copilot`, `claude-agent`, `codex-agent`, `orcarouter`, `atlascloud` (aliases: `atlas-cloud`, `atlas`) |
+| `LLMWIKI_MODEL` | Provider default | Model name to use. Overrides the provider's built-in default model. For `codex-agent`, unset delegates model choice to Codex and a set value is passed through with `--model` |
+| `LLMWIKI_EMBEDDING_PROVIDER` | Active chat provider | Backend serving embeddings, independent of `LLMWIKI_PROVIDER`. One of `anthropic`, `claude-agent`, `openai`, `ollama`, `orcarouter` |
+| `LLMWIKI_EMBEDDING_MODEL` | Provider default | Embedding model to use. Applies when the effective embedding provider is `openai`, `ollama` or `orcarouter` - ignored for `anthropic` and `claude-agent`, even when `LLMWIKI_EMBEDDING_PROVIDER` names one of them explicitly |
+
+When you set `LLMWIKI_EMBEDDING_PROVIDER`, the named provider's own credential is required: `VOYAGE_API_KEY` for `anthropic` or `claude-agent`, `OPENAI_API_KEY` (or `OPENAI_EMBEDDINGS_API_KEY`) for `openai`, `ORCAROUTER_API_KEY` for `orcarouter`, and no key for `ollama`. Setting `OPENAI_EMBEDDINGS_BASE_URL` marks a self-hosted OpenAI-compatible endpoint that needs no key, so `OPENAI_API_KEY` is not required in that case. This check only runs when `LLMWIKI_EMBEDDING_PROVIDER` is set - leaving it unset keeps today's behavior unchanged.
+
+The check runs at startup, before any compile or query work begins, so a misspelled provider name or a missing key fails immediately instead of part-way through a run.
+
+`codex-agent` is the exception to the default embedding-provider value: because
+Codex cannot embed, it requires `LLMWIKI_EMBEDDING_PROVIDER` to be set
+explicitly. A missing or unusable embedding backend fails actionably rather
+than silently degrading. The keyless combination is `codex-agent` chat plus
+`ollama` embeddings.
+
+When `codex-agent` is selected explicitly through `--provider` or a
+shell-exported `LLMWIKI_PROVIDER`, llmwiki does not open the project `.env`
+file, because that file may contain API keys. Export the Codex model, embedding
+provider, and embedding-backend settings in the shell for that run. Other
+providers retain the existing shell-over-`.env` precedence.
+
+<Warning>
+  If you point `OPENAI_EMBEDDINGS_BASE_URL` at a host you do not operate, set `OPENAI_EMBEDDINGS_API_KEY` as well. Without it the embeddings client reuses `OPENAI_API_KEY`, which sends your cloud OpenAI key to that host. llmwiki warns when this happens, except for endpoints on `localhost`.
+</Warning>
+
+### Changing the embedding backend rebuilds the index
+
+The embedding index records which provider, model, and endpoint produced its vectors. Changing any of them invalidates the index, and the next `llmwiki compile` re-embeds every page.
+
+This matters because vectors from different backends are not comparable even when the model name matches - a local server answering to `text-embedding-3-small` does not produce the same vectors as cloud OpenAI, and `nomic-embed-text` served by Ollama does not match the same model served over an OpenAI-compatible endpoint. Until the index is rebuilt, `llmwiki query` reports the index as outdated and falls back to lexical ranking rather than ranking against a mixed index.
+
+Moving between `anthropic` and `claude-agent` does **not** rebuild the index. Both send embeddings to Voyage with the same model, so their vectors are interchangeable.
+
+An index built before llmwiki recorded the endpoint carries only its model name, which cannot distinguish those backends. Such an index is kept as-is while you run without `LLMWIKI_EMBEDDING_PROVIDER` or an endpoint override, so upgrading does not re-embed your project. With either override active, the next `llmwiki compile` rebuilds it once and records the full configuration from then on.
+
+---
+
+## Anthropic
+
+| Variable | Required | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | One of the two | Standard Anthropic API key |
+| `ANTHROPIC_AUTH_TOKEN` | One of the two | Alternative auth token accepted by Anthropic-compatible gateways |
+| `ANTHROPIC_BASE_URL` | No | Custom base URL for proxies or alternate Claude endpoints. Accepts HTTP(S) URLs including Claude-style path endpoints |
+
+Either `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` satisfies authentication - you do not need both. If neither is set in your environment or `.env`, llmwiki attempts to read these values from `~/.claude/settings.json`.
+
+---
+
+## OpenAI
+
+| Variable | Required | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | Yes (for `openai` provider) | API key. For local servers that ignore auth, any value works (e.g. `sk-local`) |
+| `OPENAI_BASE_URL` | For custom or local endpoints | Base URL for chat and tool calls. **Must include `/v1`** |
+| `OPENAI_EMBEDDINGS_BASE_URL` | No | Separate base URL for embeddings requests. When unset, embeddings use the same client and base URL as chat |
+| `OPENAI_EMBEDDINGS_API_KEY` | No | Credential for embeddings requests. When unset, embeddings reuse `OPENAI_API_KEY` - set this whenever the embeddings endpoint belongs to someone else |
+
+## OpenAI-compatible request options
+
+These settings apply to chat requests built by the shared OpenAI-compatible
+client, including OpenAI, Copilot, MiniMax, Atlas Cloud, and Ollama's completion
+and streaming paths. They do not affect embeddings, Anthropic, the local agent
+providers, or Ollama's native structured-output requests.
+
+| Variable | Required | Description |
+|---|---|---|
+| `LLMWIKI_OPENAI_TOKEN_PARAM` | No | Force the token-limit field: `max_tokens` or `max_completion_tokens`. Detected from the model id by default (`o1`, `o3`, `o4`, and `gpt-5` prefixes get `max_completion_tokens`). Set it when a gateway serves a reasoning model under an id those prefixes do not match |
+| `LLMWIKI_OPENAI_REASONING_EFFORT` | No | Set `reasoning_effort` to `none`, `minimal`, `low`, `medium`, `high`, or `xhigh`. Unset defaults to `none` for GPT-5.6 IDs and their hyphenated variants; other models keep their server default. Choose a value your model and endpoint support |
+
+Invalid values fail on the first request attempt, before network access, without
+retry backoff. Valid values are checked against the installed SDK vocabulary;
+individual models can support a smaller subset. In particular, older GPT-5
+models do not support `none`.
+
+<Note>
+  Reasoning models reject `max_tokens` outright — the request fails with `Unsupported parameter: 'max_tokens' is not supported with this model`. llmwiki picks the right field from the model id, so `LLMWIKI_OPENAI_TOKEN_PARAM` is only needed when the id itself does not reveal the model family, which is common behind OpenAI-compatible gateways.
+</Note>
+
+---
+
+## OpenAI Codex CLI
+
+| Variable | Required | Description |
+|---|---|---|
+| `LLMWIKI_PROVIDER` | Yes | Set to `codex-agent` |
+| `LLMWIKI_MODEL` | No | Passed to `codex exec --model`; when unset, Codex chooses its own available default |
+| `LLMWIKI_EMBEDDING_PROVIDER` | Yes | Existing provider that serves embeddings; use `ollama` for a keyless setup |
+
+Authentication is managed only by the installed Codex CLI (`codex login`).
+llmwiki does not read Codex auth files or any OpenAI API key for chat. The CLI
+does not expose a `maxTokens` control, so llmwiki cannot honor that internal
+hint for this provider. Each request has a fixed 10-minute timeout and 1 MiB
+process/final-output caps.
+
+The minimum verified compatible Codex CLI version is **0.152.1**. If an older
+binary rejects a required secure flag, llmwiki reports it as incompatible;
+update with `npm install -g @openai/codex@latest`.
+
+---
+
+## Ollama
+
+| Variable | Required | Description |
+|---|---|---|
+| `OLLAMA_HOST` | Yes (for `ollama` provider) | Ollama host URL for chat and structured tool calls. **Must include `/v1`**. Structured tool calls use the native `/api/chat` endpoint on the same base URL with the `/v1` suffix removed (any path prefix is preserved, e.g. `https://proxy/ollama/v1` → `https://proxy/ollama/api/chat`) |
+| `OLLAMA_EMBEDDINGS_HOST` | No | Separate Ollama host URL for embeddings. When unset, embeddings use `OLLAMA_HOST` |
+
+---
+
+## GitHub Copilot
+
+| Variable | Required | Description |
+|---|---|---|
+| `GITHUB_TOKEN` | Yes (for `copilot` provider) | GitHub OAuth token with the `copilot` scope. Obtain with `gh auth token` after running `gh auth refresh --scopes copilot`. Classic PATs are not supported |
+
+---
+
+## Atlas Cloud
+
+| Variable | Required | Description |
+|---|---|---|
+| `ATLASCLOUD_API_KEY` | Yes (for `atlascloud` provider) | API key for the [Atlas Cloud](https://www.atlascloud.ai) gateway. `ATLAS_CLOUD_API_KEY` is accepted as an alternative; whichever is set first in that order wins |
+| `ATLASCLOUD_BASE_URL` | No | Override the API base URL. `ATLAS_CLOUD_BASE_URL` is accepted as an alternative |
+
+Model names are namespaced by publisher (e.g. `qwen/qwen3.5-35b-a3b`, the default). An override set through `LLMWIKI_MODEL` must be a model Atlas Cloud lists as supporting tools, because `compile` extracts concepts through a tool call.
+
+---
+
+## OrcaRouter
+
+| Variable | Required | Description |
+|---|---|---|
+| `ORCAROUTER_API_KEY` | Yes (for `orcarouter` provider) | API key for the [OrcaRouter](https://www.orcarouter.ai) gateway (`sk-orca-...`). Model names are namespaced by upstream provider (e.g. `openai/gpt-4o-mini`); the default model is `openai/gpt-4o-mini` and `LLMWIKI_MODEL` overrides it |
+
+---
+
+## Voyage (embeddings)
+
+| Variable | Required | Description |
+|---|---|---|
+| `VOYAGE_API_KEY` | For semantic search | Voyage API key used by the `anthropic` and `claude-agent` providers for embeddings. Without it, `llmwiki query` falls back to lexical ranking |
+
+---
+
+## Embeddings
+
+`llmwiki compile` embeds pages and chunks in provider-native batches. These variables are optional.
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLMWIKI_EMBED_BATCH_SIZE` | Per-provider default (`256` OpenAI, `128` Voyage, `64` Ollama or OrcaRouter) | Number of texts sent per embedding request. Raise to reduce round-trips; lower to stay within a provider's limits. Non-positive or non-integer values are ignored. Values above the client cap are clamped with a warning; OrcaRouter's conservative client cap is 64 |
+| `LLMWIKI_EMBED_STRICT` | *(unset)* | When set to `1`, `true`, `yes`, or `on`, an embedding failure during compile exits with a non-zero status instead of warning and continuing. Use it in CI to catch a broken or misconfigured embedding provider |
+| `LLMWIKI_BINARY_EMBEDDINGS` | Automatic for large stores | Set to `1`, `true`, `yes`, or `on` to select binary storage on the next embedding-store write, even for a small wiki. Existing binary stores remain binary when this variable is unset |
+
+<Note>
+  Batching controls requests independently of storage. Small stores keep `.llmwiki/embeddings.json`; stores exceeding its 64 MiB limit automatically use `.llmwiki/embeddings.bin` without repeating embedding requests.
+</Note>
+
+### Embedding retries and quarantine
+
+Failed refreshes retain a durable per-page retry budget in
+`.llmwiki/pending-embeddings.json`. After five failed attempts, the page moves to
+`.llmwiki/quarantined-embeddings.json`; unchanged compiles do not reset its budget.
+Both files use bounded, root-confined reads and atomic writes.
+
+Each marker is limited to 5,000 entries and 256 KiB. Provider work starts only
+after its budget is persisted. Existing attempts take precedence over new work;
+pages that do not fit wait for a later compile. When quarantine is full, exhausted
+entries remain in pending without being retried. A full pair of markers can stop
+new embedding work until you recover the exhausted entries.
+
+Deferred work produces a warning with its page count. Strict mode fails after
+settling admitted work, preserving successful results and retry accounting.
+For a valid v3 store with the same backend, deferred pages retain eligible page
+and passage vectors with their original hashes and timestamps. These may be stale;
+deleted, ineligible, invalid and other-backend vectors are excluded. Legacy-store
+upgrades do not preserve stale vectors for deferred pages.
+
+After fixing the provider or page, edit the source and compile again, or re-save
+the page through its normal write workflow, to give it a fresh budget. Changing
+embedding configuration alone does not clear quarantine. To reset all budgets,
+back up both markers, then remove them while no compile or refresh is running and
+compile again. This can incur provider costs; keep sources, wiki pages and
+`state.json` intact. Do not reset budgets repeatedly to hide an unresolved failure.
+
+`lint`, `status --json` and MCP `wiki_status` distinguish pending work, stopped
+retries and unreadable quarantine state. Inspection does not retry embeddings or
+modify the markers.
+
+### Embedding storage
+
+Binary storage keeps metadata and Float32 vectors in one atomically replaced
+file. It retains chunk text and the existing logical index version. Float32
+introduces small rounding differences; it does not change the embedding model.
+The limits are 256 MiB of metadata, 512 MiB for the complete binary file, and
+100,000 combined page and chunk records. Higher-dimensional vectors and longer
+chunk text use more space, so the record limit is not a promise that every such
+corpus fits. The index is still loaded into memory for retrieval.
+
+Once `embeddings.bin` exists, readers and writers use it without the flag.
+Any older JSON file is left untouched as a historical backup, not a fallback.
+An unreadable or corrupt binary index produces `embedding-store-unavailable`
+and degraded retrieval rather than silently reading that older snapshot.
+The context command uses its existing `embedding-store-missing` warning code
+for this condition, meaning no usable store, not necessarily no file on disk.
+Repair requires an embedding update with changed or pending eligible pages;
+an unchanged no-op compile does not repair the index. Rebuilding an unavailable
+index embeds the live eligible corpus again and can incur provider costs.
+
+Unsetting the flag does not convert binary back to JSON. Before downgrading to
+a release without binary support, back up and move both derived index files
+aside, then rebuild with that release. This only works for a corpus that fits
+the older JSON limit; larger corpora require a binary-capable release. Do not
+delete just the binary file and reuse stale JSON. Keep your source files, wiki
+pages and `state.json` intact.
+
+---
+
+## Timeouts
+
+| Variable | When unset | Description |
+|---|---|---|
+| `LLMWIKI_REQUEST_TIMEOUT_MS` | Provider built-in default (10 min for `openai`, 30 min for `ollama`) | Per-request timeout override in milliseconds. Applies to both the `openai` and `ollama` backends. When unset, each provider falls back to its own built-in default |
+| `OLLAMA_TIMEOUT_MS` | 30-minute `ollama` built-in default | Ollama-specific timeout override in milliseconds. Wins over `LLMWIKI_REQUEST_TIMEOUT_MS` when both are set |
+
+Timeout resolution for Ollama: explicit constructor option → `OLLAMA_TIMEOUT_MS` → `LLMWIKI_REQUEST_TIMEOUT_MS` → built-in 30-minute default.
+
+Non-numeric, zero, or negative values are silently ignored and the next source in the chain is used.
+
+---
+
+## Compile
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLMWIKI_COMPILE_CONCURRENCY` | `5` | Maximum LLM calls run in parallel during a compile, across both concept extraction and page generation. Raise it to cut wall-clock on cold starts and large refreshes; lower it to ease a provider's rate limits. Non-positive or non-integer values fall back to the default, and any value above `50` is clamped down with a warning. The `--concurrency` flag on `llmwiki compile`, `llmwiki refresh`, `llmwiki watch`, and `llmwiki quickstart` overrides this for a single run. An invalid `--concurrency` flag value is ignored with a warning, so this variable (or the default) still applies; `quickstart --json` writes that warning to stderr to keep stdout parseable, while human output keeps the warning on stdout |
+
+---
+
+## Profiles, workflows, and connectors
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLMWIKI_TRUSTED_WRITE` | *(unset)* | Out-of-workspace operator grant for profile workflow writes and direct artifact writes. Set to a comma- or whitespace-separated list of profile ids, such as `autosci`, or to `*` for all profiles. A profile can request trusted-write authority, but only this environment grant lets a clean trust-gated write auto-apply live. |
+| `LLMWIKI_CONNECTORS` | *(unset)* | Comma- or whitespace-separated list of connector ids activated by the operator, such as `crossref`. Profiles can bind connectors, but they cannot activate network access. |
+
+Connector etiquette such as `contactEmail`, `minRequestIntervalMs`, and
+`allowedHosts` lives in `.llmwiki/config.json`. Local connector config can only
+tighten the first-party registry policy. It cannot activate connectors or add
+new hosts.
+
+```json
+{
+  "version": 1,
+  "connectors": {
+    "crossref": {
+      "contactEmail": "research@example.com",
+      "minRequestIntervalMs": 1500
+    }
+  }
+}
+```
+
+---
+
+## Gateway-specific request fields
+
+`LLMWIKI_OPENAI_EXTRA_BODY` accepts a JSON object of additional chat-completion
+body fields. It applies to OpenAI-compatible providers, including streaming and
+tool calls through the OpenAI client, but never to embeddings, agent-backed
+providers, or Ollama's native structured-output requests. Blank means no
+extensions. For an endpoint that requires thinking disabled for forced tools:
+
+```bash
+LLMWIKI_OPENAI_EXTRA_BODY='{"thinking":{"type":"disabled"}}' llmwiki compile
+```
+
+Check your endpoint's documentation before using vendor-specific fields. For
+example, [DeepSeek documents its thinking toggle](https://api-docs.deepseek.com/guides/thinking_mode/).
+Fields are added at the top level, not nested under `extra_body`, and nested
+objects are not merged. Unsupported extensions can still produce provider errors.
+
+Malformed JSON, non-object values, and overrides of `model`, `messages`, `tools`,
+`tool_choice`, `stream`, `max_tokens`, `max_completion_tokens`, or
+`reasoning_effort` fail locally without retry backoff. Use the dedicated token
+and reasoning settings for those limits. Required tool selection remains in
+place because extraction depends on structured arguments, not optional prose.
+
+## Output
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLMWIKI_MAX_TOKENS` | `4096` | Default completion-token limit for shared LLM calls, including concept extraction and page generation. Use a positive safe integer in decimal digits; blank means the default. Internal calls with their own fixed limit are unaffected. Agent-backed providers do not honor this limit. This is separate from the input character budget below |
+| `LLMWIKI_OUTPUT_LANG` | *(model default, typically English)* | Language for generated wiki content. Applies to every prompt in the compile and query pipelines. Examples: `zh-CN`, `Chinese`, `ja`, `Japanese`. The `--lang` CLI flag on `llmwiki compile` and `llmwiki query` overrides this for a single invocation |
+| `LLMWIKI_SOURCES_SECTION` | *(enabled)* | Set to `off`, `false`, `0`, or `no` to stop asking the model for a trailing `## Sources` section in generated pages. Useful when your own renderer already displays the `sources:` frontmatter, which would otherwise appear twice. Does not change provenance: the frontmatter and the inline `^[file.md:1-5]` citation markers come from the compiler, not from this instruction. The `--no-sources-section` flag on `llmwiki compile` sets it for a single invocation |
+| `LLMWIKI_PROMPT_BUDGET_CHARS` | `200000` | Character ceiling for combined per-concept source content sent to the LLM. Raise for larger-context models; lower for small-context local models. A stderr warning prints when the cap fires |
+
+---
+
+## Debug
+
+| Variable | Values | Description |
+|---|---|---|
+| `LLMWIKI_DEBUG` | `1` or `verbose` | Debug tracing for the `claude-agent` provider only. `1` prints a concise one-line trace per SDK message plus subprocess errors. `verbose` additionally enables the Agent SDK's full verbose logging |
+| `LLMWIKI_VERBOSE` | any non-empty value | Enable verbose progress output on commands that accept `--verbose` (`compile`, `refresh`, `quickstart`, `ingest`, `ingest-session`, `query`, `context`, `export`, `import`). Equivalent to passing `--verbose` on the command line. Detail is richest for `compile`, `refresh`, and `quickstart`, which print per-step lines for source parsing, concept merging, page writes, embedding batches, and total compile time |
+
+---
+
+## Example `.env` file
+
+Place this file in your project root (the same directory that contains `sources/` and `wiki/`):
+
+```bash
+# .env - llmwiki project configuration
+
+# Provider
+LLMWIKI_PROVIDER=anthropic
+
+# Anthropic credentials
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional: proxy endpoint
+# ANTHROPIC_BASE_URL=https://proxy.example.com
+
+# Optional: embeddings for semantic search (anthropic and claude-agent providers)
+# VOYAGE_API_KEY=pa-...
+
+# Optional: output language
+# LLMWIKI_OUTPUT_LANG=zh-CN
+
+# Optional: raise prompt budget for large-context models
+# LLMWIKI_PROMPT_BUDGET_CHARS=400000
+
+# Optional: raise compile parallelism (or lower it to ease provider rate limits)
+# LLMWIKI_COMPILE_CONCURRENCY=10
+
+# Optional: activate first-party connectors for this shell
+# LLMWIKI_CONNECTORS=crossref
+
+# Optional: grant trust-gated profile writes for this shell
+# LLMWIKI_TRUSTED_WRITE=autosci
+```
+
+<Note>
+  Except for explicitly selected `codex-agent` runs, the `.env` file is read from your project root at startup. It is a convenience for projects where you don't want to export variables in your shell every session. Shell environment variables always take precedence over `.env` values, so you can override any `.env` setting with a one-off `export` without editing the file.
+</Note>

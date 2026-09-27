@@ -1,0 +1,291 @@
+/**
+ * @file test/fixtures/template-publish-distribution.ts
+ * @description Builds production-signed static template distributions for the
+ * frozen Slice A CLI oracle without introducing an alternate signing protocol.
+ */
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { expect } from "vitest";
+import { parseTemplateCoordinate } from "../../src/profile/templates/signing/protocol.js";
+import type { SignedPackageEnvelope, SignedTapIndex } from "../../src/profile/templates/signing/types.js";
+import { signedIndex, signedPackage, TAP_KEY } from "./template-signing.js";
+
+const CLI = path.resolve("dist/cli.js");
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Maximum time any compiled publisher-verifier CLI assertion may wait. */
+export const CLI_TIMEOUT_MS = 5_000;
+
+export interface PublishDistribution {
+  root: string;
+  directory: string;
+  keyFile: string;
+  packageFile: string;
+  envelope: SignedPackageEnvelope;
+  index: SignedTapIndex;
+}
+
+export interface VerifyResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Create a current, one-package distribution signed by the production fixtures. */
+export async function createPublishDistribution(
+  envelope: SignedPackageEnvelope = signedPackage(),
+): Promise<PublishDistribution> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "llmwiki-publish-verify-"));
+  const directory = path.join(root, "dist");
+  const digest = digestHex(envelope.payloadDigest);
+  const packageFile = path.join(directory, "packages", "sha256", `${digest}.json`);
+  const keyFile = path.join(root, "tap-public-key.txt");
+  const executionGuard = path.join(root, "execution-guard.mjs");
+  await Promise.all([
+    path.dirname(packageFile),
+    ...writableEnvironmentDirectories(root),
+  ].map((directoryPath) => mkdir(directoryPath, { recursive: true })));
+  await writeFile(packageFile, JSON.stringify(envelope), "utf8");
+  await writeFile(keyFile, `${TAP_KEY.publicKey}\n`, "utf8");
+  await writeFile(executionGuard, executionGuardSource(), "utf8");
+  const index = currentIndex(envelope);
+  await writeFile(path.join(directory, "index.json"), JSON.stringify(index), "utf8");
+  return { root, directory, keyFile, packageFile, envelope, index };
+}
+
+/** Replace the index with another correctly signed snapshot. */
+export async function writeSignedDistributionIndex(
+  fixture: PublishDistribution,
+  overrides: Partial<SignedTapIndex>,
+): Promise<SignedTapIndex> {
+  const index = signedIndex({
+    generatedAt: fixture.index.generatedAt,
+    expiresAt: fixture.index.expiresAt,
+    packages: fixture.index.packages,
+    ...overrides,
+  });
+  await writeFile(path.join(fixture.directory, "index.json"), JSON.stringify(index), "utf8");
+  fixture.index = index;
+  return index;
+}
+
+/** Invoke the compiled public CLI exactly as an operator would. */
+export function runPublishVerify(
+  fixture: PublishDistribution,
+  extraArgs: string[] = [],
+  keyId = TAP_KEY.keyId,
+  keyFile = fixture.keyFile,
+  tap = "official",
+): VerifyResult {
+  const result = spawnSync(process.execPath, [
+    CLI, "template", "publish", "verify", fixture.directory,
+    "--tap", tap, "--key-id", keyId, "--key-file", keyFile, ...extraArgs,
+  ], { cwd: fixture.root, encoding: "utf8", env: offlineEnvironment(fixture.root), timeout: CLI_TIMEOUT_MS });
+  if (result.error) throw new Error(`publisher verifier subprocess failed: ${result.error.message}`);
+  if (result.signal) throw new Error(`publisher verifier subprocess ended by ${result.signal}`);
+  if (result.status === null) throw new Error("publisher verifier subprocess ended without an exit status");
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+/** Capture names, kinds, sizes, and content hashes without following symlinks. */
+export async function snapshotTree(root: string): Promise<string[]> {
+  return snapshotEntries(root, "");
+}
+
+/** Remove a temporary distribution and all adversarial entries beneath it. */
+export async function removePublishDistribution(fixture: PublishDistribution): Promise<void> {
+  await rm(fixture.root, { recursive: true, force: true });
+}
+
+/** Return combined bounded CLI diagnostics for assertions. */
+export function diagnostics(result: VerifyResult): string {
+  return `${result.stdout}\n${result.stderr}`;
+}
+
+/** Require a bounded, intentional CLI refusal that cannot masquerade as missing implementation. */
+export function assertPublishVerifyFailure(result: VerifyResult, reason: RegExp): void {
+  const output = diagnostics(result);
+  expect(result.status).not.toBe(0);
+  expect(output).toMatch(reason);
+  expect(output).not.toMatch(/unknown command ['"]?publish|TypeError|ReferenceError|\n\s+at /i);
+  expect(result.stdout).not.toMatch(/"verified"\s*:\s*true/);
+  expect(result.stderr.length).toBeLessThanOrEqual(4096);
+}
+
+/** Convert the protocol digest to its only permitted package filename. */
+export function digestHex(digest: string): string {
+  const match = /^sha256:([0-9a-f]{64})$/.exec(digest);
+  if (!match) throw new Error(`invalid fixture digest: ${digest}`);
+  return match[1];
+}
+
+function currentIndex(envelope: SignedPackageEnvelope): SignedTapIndex {
+  const coordinate = parseTemplateCoordinate(envelope.coordinate);
+  const now = Date.now();
+  return signedIndex({
+    generatedAt: new Date(now - 60_000).toISOString(),
+    expiresAt: new Date(now + DAY_MS).toISOString(),
+    packages: [{
+      coordinate: envelope.coordinate,
+      publisher: coordinate.publisher,
+      payloadDigest: envelope.payloadDigest,
+    }],
+  });
+}
+
+function offlineEnvironment(root: string): NodeJS.ProcessEnv {
+  const guard = `--import=${pathToFileURL(path.join(root, "execution-guard.mjs")).href}`;
+  const environmentRoot = path.join(root, "environment");
+  return {
+    ...process.env,
+    HOME: path.join(environmentRoot, "home"),
+    APPDATA: path.join(environmentRoot, "config"),
+    LOCALAPPDATA: path.join(environmentRoot, "cache"),
+    XDG_CONFIG_HOME: path.join(environmentRoot, "config"),
+    XDG_CACHE_HOME: path.join(environmentRoot, "cache"),
+    XDG_DATA_HOME: path.join(environmentRoot, "data"),
+    XDG_STATE_HOME: path.join(environmentRoot, "state"),
+    TMPDIR: path.join(environmentRoot, "tmp"),
+    TMP: path.join(environmentRoot, "tmp"),
+    TEMP: path.join(environmentRoot, "tmp"),
+    LLMWIKI_VERBOSE: "",
+    FORCE_COLOR: "0",
+    HTTP_PROXY: "http://127.0.0.1:1",
+    HTTPS_PROXY: "http://127.0.0.1:1",
+    ALL_PROXY: "http://127.0.0.1:1",
+    NO_PROXY: "",
+    NODE_OPTIONS: guard,
+  };
+}
+
+function writableEnvironmentDirectories(root: string): string[] {
+  const environmentRoot = path.join(root, "environment");
+  return ["home", "config", "cache", "data", "state", "tmp"]
+    .map((name) => path.join(environmentRoot, name));
+}
+
+function executionGuardSource(): string {
+  return [
+    ...guardImportsAndNetworkSource(),
+    ...guardFilesystemSource(),
+    ...guardStickyFailureSource(),
+  ].join("\n");
+}
+
+/** Build preload statements that make any network route fail and remain recorded. */
+function guardImportsAndNetworkSource(): string[] {
+  return [
+    'import childProcess from "node:child_process";',
+    'import dgram from "node:dgram";',
+    'import dns from "node:dns";',
+    'import fs from "node:fs";',
+    'import http from "node:http";',
+    'import http2 from "node:http2";',
+    'import https from "node:https";',
+    'import net from "node:net";',
+    'import tls from "node:tls";',
+    'import workerThreads from "node:worker_threads";',
+    'import { syncBuiltinESMExports } from "node:module";',
+    'const attempts = new Set();',
+    'const deny = (kind) => function deniedOperation() {',
+    '  attempts.add(kind);',
+    '  throw new Error(`publisher verifier attempted forbidden ${kind}`);',
+    '};',
+    'for (const target of [http, https]) { target.request = deny("network access"); target.get = deny("network access"); }',
+    'http2.connect = deny("network access");',
+    'net.connect = deny("network access"); net.createConnection = deny("network access");',
+    'net.Socket.prototype.connect = deny("network access"); tls.connect = deny("network access");',
+    'dgram.Socket.prototype.connect = deny("network access"); dgram.Socket.prototype.send = deny("network access");',
+    'const dnsMethods = (target) => Object.getOwnPropertyNames(target).filter((name) =>',
+    '  name === "lookup" || name === "lookupService" || name === "reverse" || name.startsWith("resolve"));',
+    'for (const name of dnsMethods(dns)) dns[name] = deny("network access");',
+    'for (const name of dnsMethods(dns.promises)) dns.promises[name] = deny("network access");',
+    'for (const Resolver of [dns.Resolver, dns.promises.Resolver]) {',
+    '  for (const name of dnsMethods(Resolver.prototype)) Resolver.prototype[name] = deny("network access");',
+    '}',
+    'globalThis.fetch = deny("network access");',
+    'globalThis.WebSocket = deny("network access");',
+    'for (const name of ["exec", "execFile", "fork", "spawn", "execSync", "execFileSync", "spawnSync"]) {',
+    '  childProcess[name] = deny("child process");',
+    '}',
+    'childProcess.ChildProcess.prototype.spawn = deny("child process");',
+    'workerThreads.Worker = deny("worker thread");',
+  ];
+}
+
+/** Build preload statements that detect even caught, transient filesystem writes. */
+function guardFilesystemSource(): string[] {
+  return [
+    'const mutators = ["appendFile", "chmod", "chown", "copyFile", "cp", "createWriteStream", "fchmod",',
+    '  "fchown", "ftruncate", "futimes", "link",',
+    '  "lchmod", "lchown", "lutimes", "mkdir", "mkdtemp", "rename", "rm", "rmdir", "symlink",',
+    '  "truncate", "unlink", "utimes", "write", "writeFile", "writev"];',
+    'for (const name of mutators) {',
+    '  if (typeof fs[name] === "function") fs[name] = deny("filesystem write");',
+    '  if (typeof fs[`${name}Sync`] === "function") fs[`${name}Sync`] = deny("filesystem write");',
+    '  if (typeof fs.promises[name] === "function") fs.promises[name] = deny("filesystem write");',
+    '}',
+    'const writeMask = fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_APPEND',
+    '  | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_EXCL;',
+    'const writeFlags = (flags) => typeof flags === "number" ? (flags & writeMask) !== 0 : /[aw+]/.test(flags);',
+    'const open = fs.open; fs.open = function guardedOpen(path, flags, ...rest) {',
+    '  return writeFlags(flags) ? deny("filesystem write")() : open.call(this, path, flags, ...rest);',
+    '};',
+    'const openSync = fs.openSync; fs.openSync = function guardedOpenSync(path, flags, ...rest) {',
+    '  return writeFlags(flags) ? deny("filesystem write")() : openSync.call(this, path, flags, ...rest);',
+    '};',
+    'const promiseOpen = fs.promises.open; fs.promises.open = async function guardedPromiseOpen(path, flags, ...rest) {',
+    '  if (writeFlags(flags)) return deny("filesystem write")();',
+    '  const handle = await promiseOpen.call(this, path, flags, ...rest);',
+    '  for (const name of ["chmod", "chown", "truncate", "utimes", "write", "writeFile", "writev", "createWriteStream"]) {',
+    '    if (typeof handle[name] === "function") handle[name] = deny("filesystem write");',
+    '  }',
+    '  return handle;',
+    '};',
+  ];
+}
+
+/** Build preload statements that force a nonzero exit after any forbidden attempt. */
+function guardStickyFailureSource(): string[] {
+  return [
+    'syncBuiltinESMExports();',
+    'const reportAttempts = () => {',
+    '  if (attempts.size === 0) return false;',
+    '  process.stderr.write(`publisher verifier attempted forbidden operations: ${[...attempts].sort().join(", ")}\\n`);',
+    '  return true;',
+    '};',
+    'const originalExit = process.exit.bind(process);',
+    'process.exit = (code) => originalExit(reportAttempts() ? 86 : code);',
+    'process.on("beforeExit", () => {',
+    '  if (reportAttempts()) process.exitCode = 86;',
+    '});',
+  ];
+}
+
+async function snapshotEntries(root: string, relative: string): Promise<string[]> {
+  const absolute = path.join(root, relative);
+  const names = await readdir(absolute);
+  const result: string[] = [];
+  for (const name of names.sort()) {
+    const childRelative = path.join(relative, name);
+    const child = path.join(root, childRelative);
+    const info = await lstat(child);
+    result.push(await snapshotEntry(child, childRelative, info));
+    if (info.isDirectory()) result.push(...await snapshotEntries(root, childRelative));
+  }
+  return result;
+}
+
+async function snapshotEntry(
+  absolute: string,
+  relative: string,
+  info: Awaited<ReturnType<typeof lstat>>,
+): Promise<string> {
+  if (!info.isFile()) return `${relative}:${info.mode}:${info.size}`;
+  const bytes = await readFile(absolute);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  return `${relative}:${info.mode}:${info.size}:${digest}`;
+}

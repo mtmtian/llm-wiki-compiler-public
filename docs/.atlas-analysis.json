@@ -1,0 +1,140 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "llmwiki",
+  "projectDescription": "A knowledge compiler that turns raw sources — URLs, files, and session exports — into a persistent, interlinked markdown wiki with semantic search, citation tracing, and MCP agent integration.",
+  "theme": "luma",
+  "primaryColor": "#5B6AD0",
+  "lightColor": "#EEF0FF",
+  "darkColor": "#1A1D3A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/how-it-works",
+              "concepts/wiki-model",
+              "concepts/page-types",
+              "concepts/citations"
+            ]
+          },
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "cli/ingest",
+              "cli/compile",
+              "cli/query",
+              "cli/view",
+              "cli/lint-eval",
+              "cli/export",
+              "cli/review",
+              "cli/serve"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/providers",
+              "configuration/environment-variables",
+              "configuration/review-policy",
+              "configuration/schema"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/mcp-agent-integration",
+              "guides/sdk",
+              "guides/atomic-memory-bridge",
+              "guides/ci-quality-gates"
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": [
+              "troubleshooting/faq",
+              "troubleshooting/stale-pages"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Two-phase LLM compile pipeline: concept extraction then page generation",
+    "Incremental compilation with content-hash change detection",
+    "Hybrid semantic + BM25 retrieval with wikilink-graph expansion",
+    "Paragraph- and claim-level citation tracing back to source line ranges",
+    "Local read-only web viewer with search, graph, and provenance chips",
+    "MCP server for Claude Desktop, Cursor, and Claude Code integration",
+    "In-process SDK via createWiki() for embedding llmwiki programmatically",
+    "Review queue and policy for holding low-confidence or risky pages",
+    "Source freshness tracking with stale/orphaned page detection",
+    "Eval harness with CI-gateable health scores and citation quality metrics",
+    "Multi-provider support: Anthropic, OpenAI-compatible, Ollama, GitHub Copilot, Claude Agent SDK",
+    "Export to llms.txt, JSON, JSON-LD, GraphML, and Marp slides",
+    "Obsidian-compatible wikilinks with alias resolution",
+    "Activity journal (log.md) for audit tracing",
+    "Rule-candidate extraction from ingested sources"
+  ],
+  "publicApiSurface": [
+    "llmwiki quickstart <source>",
+    "llmwiki ingest <url|file>",
+    "llmwiki ingest-session <path>",
+    "llmwiki compile [--review] [--lang <code>]",
+    "llmwiki refresh --stale [--dry-run]",
+    "llmwiki query \"<question>\" [--save]",
+    "llmwiki view [--open] [--host] [--port]",
+    "llmwiki lint",
+    "llmwiki eval [--suite fast|full]",
+    "llmwiki export [--target <name>] [--project-id <id>]",
+    "llmwiki review list|show|approve|reject",
+    "llmwiki rules extract|list|approve|reject|export",
+    "llmwiki schema init|show",
+    "llmwiki context \"<prompt>\" [--json]",
+    "llmwiki next [--json]",
+    "llmwiki watch",
+    "llmwiki serve [--root <dir>]",
+    "createWiki({ root })",
+    "wiki.ingest({ source })",
+    "wiki.ingestText({ title, text })",
+    "wiki.compile(options?)",
+    "wiki.query(question, options?)",
+    "wiki.getPage(ref)",
+    "wiki.listPages(options?)",
+    "wiki.listSources(options?)",
+    "wiki.getSource(id)",
+    "wiki.deleteSource(id)",
+    "wiki.status()",
+    "wiki.lint()",
+    "wiki.getContextPack({ prompt, budget?, depth?, topPages?, topChunks? })",
+    "wiki.exportJson(options?)",
+    "wiki.runEval({ mode, record? })",
+    "MCP tool: ingest_source",
+    "MCP tool: compile_wiki",
+    "MCP tool: query_wiki",
+    "MCP tool: search_pages",
+    "MCP tool: read_page",
+    "MCP tool: lint_wiki",
+    "MCP tool: wiki_status",
+    "MCP tool: get_context_pack",
+    "MCP tool: run_eval",
+    "MCP resource: llmwiki://index",
+    "MCP resource: llmwiki://concept/{slug}",
+    "MCP resource: llmwiki://query/{slug}",
+    "MCP resource: llmwiki://sources",
+    "MCP resource: llmwiki://state",
+    "MCP resource: llmwiki://eval/report",
+    "MCP resource: llmwiki://eval/history"
+  ]
+}

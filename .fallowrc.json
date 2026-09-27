@@ -1,0 +1,43 @@
+{
+  "$schema": "https://fallow.tools/schema.json",
+  "entry": [
+    "deployment/agent_plugins/pi-extension.ts",
+    "extensions/knowledge-flow/entry.ts",
+    "extensions/knowledge-flow/build.mjs",
+    "src/viewer/assets/viewer.js",
+    "scripts/copy-viewer-assets.mjs",
+    "src/viewer/assets/viewer-theme-boot.js",
+    "test/fixtures/mock-embeddings.mjs",
+    "test/fixtures/track-dotenv-read.mjs"
+  ],
+  "ignorePatterns": [
+    "docs/**",
+    "src/viewer/assets/index.html",
+    "src/viewer/assets/viewer-content.css",
+    "src/viewer/assets/viewer-tokens.css",
+    "src/viewer/assets/viewer-chrome.css",
+    "src/viewer/assets/viewer-dashboard.css",
+    "src/viewer/assets/viewer-health.css",
+    "src/viewer/assets/viewer-pipeline.css",
+    "src/viewer/assets/viewer-graph.css",
+    "src/viewer/assets/viewer-material.css"
+  ],
+  "ignoreDependencies": [
+    "@earendil-works/pi-coding-agent",
+    "@fontsource/dm-sans",
+    "@fontsource/nunito",
+    "@fontsource/space-grotesk",
+    "@fontsource/jetbrains-mono"
+  ],
+  "ignoreExports": [
+    { "file": "src/utils/output.ts", "exports": ["getQuiet"] }
+  ],
+  "overrides": [
+    {
+      "files": ["src/providers/*.ts", "src/utils/provider-guard.ts"],
+      "rules": {
+        "unused-class-members": "off"
+      }
+    }
+  ]
+}

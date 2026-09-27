@@ -1,0 +1,140 @@
+---
+title: "llmwiki ingest - Add Sources to Your Wiki Project"
+sidebarTitle: "Ingest"
+description: "llmwiki ingest fetches a URL or copies a local file into sources/. Also covers ingest-session for AI session exports and quickstart for one-step setup."
+---
+
+Before you can compile a wiki, you need raw material. Ingesting a source means pulling external content - a web page, a PDF, a YouTube video transcript, a local Markdown file - into your project's `sources/` directory, where it becomes available for the compile pipeline. Every ingest produces a single Markdown file with YAML frontmatter recording the source URL or path, the detected source type, the ingest timestamp, and a truncation flag if the content exceeded the character limit. That file is the stable, content-addressed record the compiler reads.
+
+You typically ingest first and compile second. If you're just getting started and want to do both in a single step, see [`llmwiki quickstart`](#llmwiki-quickstart) below.
+
+## `llmwiki ingest <url|file>`
+
+```bash
+llmwiki ingest <url|file>
+```
+
+Fetches `<url>` or reads `<file>` from disk, converts the content to Markdown, enforces a character limit, and writes the result to `sources/<slug>.md`. After a successful ingest the CLI prints the saved path and reminds you to run `llmwiki compile`.
+
+### Supported source types
+
+`llmwiki ingest` detects the source type automatically:
+
+| Type | What triggers it | What gets saved |
+|------|-----------------|-----------------|
+| **Web page** | Any `http://` or `https://` URL that isn't a YouTube URL | Full page text converted to Markdown |
+| **Wikipedia** | Wikipedia URLs (treated as web) | Article body converted to Markdown |
+| **arXiv** | arXiv abstract or PDF URLs | Paper text converted to Markdown |
+| **YouTube transcript** | YouTube URLs (`youtube.com`, `youtu.be`) | Auto-generated or manual transcript |
+| **PDF** | Local `.pdf` file | Text extracted from the PDF |
+| **Image** | Local `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`, `.tiff`, `.tif`, `.svg` | LLM-described image content |
+| **Transcript** | Local `.vtt`, `.srt`, or `.txt` files that contain speaker-tag or timestamp patterns | Transcript formatted as Markdown |
+| **Markdown / text** | Any other local file (`.md`, `.txt`, `.rst`, …) | File content verbatim |
+
+Content longer than 100,000 characters is truncated. The saved file records `truncated: true` and `originalChars: <n>` in its frontmatter so downstream tooling knows the source is partial.
+
+### Flags
+
+`llmwiki ingest` takes no flags beyond the positional `<url|file>` argument. Source type detection, character limits, and output paths are handled automatically.
+
+### Examples
+
+```bash
+# Ingest a Wikipedia article
+llmwiki ingest https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)
+
+# Ingest an arXiv paper
+llmwiki ingest https://arxiv.org/abs/1706.03762
+
+# Ingest a YouTube video (saves the transcript)
+llmwiki ingest https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+# Ingest a local Markdown file
+llmwiki ingest ./notes/architecture-decisions.md
+
+# Ingest a PDF
+llmwiki ingest ./papers/attention-is-all-you-need.pdf
+
+# Ingest an image (LLM describes the content)
+llmwiki ingest ./diagrams/system-architecture.png
+```
+
+### SSRF considerations
+
+`llmwiki ingest` is a server-side fetch primitive - it follows the URL you give it and reads files from disk. **Only pass trusted input to `llmwiki ingest`.** If you're building a tool that ingests user-supplied URLs or untrusted strings, use the SDK's `ingestText()` method instead. `ingestText` accepts raw text without making any network requests or filesystem reads, so it is safe for untrusted content.
+
+---
+
+## `llmwiki ingest-session <path>`
+
+```bash
+llmwiki ingest-session <path>
+```
+
+Imports Claude, Codex, or Cursor session exports into `sources/`. Session export files are JSON records that capture the full conversation transcript from an AI coding or chat session. `llmwiki ingest-session` parses the file, identifies the adapter (Claude / Codex / Cursor) automatically, formats the conversation as Markdown, and writes it to `sources/` with frontmatter that records the adapter name, session start/end times, and participant identity when present.
+
+You can pass either a **single session file** or a **directory**. When you pass a directory, `llmwiki ingest-session` scans every file at the top level of that directory, imports all recognised session files, and skips unrecognised ones with a warning. The batch run throws an error if zero files were imported, so you always know if something went wrong.
+
+### Examples
+
+```bash
+# Ingest a single Claude session export
+llmwiki ingest-session ./exports/claude-session-2024-06-05.json
+
+# Ingest all session files in a directory
+llmwiki ingest-session ./exports/
+
+# Then compile the ingested sessions into wiki pages
+llmwiki compile
+```
+
+Session files land in `sources/` just like any other ingest result. The compile pipeline treats them identically to web or file sources - concepts are extracted from the conversation text and turned into wiki pages.
+
+---
+
+## `llmwiki quickstart <source>`
+
+```bash
+llmwiki quickstart <source>
+```
+
+`quickstart` is a first-run convenience wrapper that ingests a source, compiles the wiki, and opens the local viewer - all in one command. It is the fastest way to go from zero to a browsable wiki.
+
+Under the hood, `quickstart` runs `ingest` then `compile`. Compile requires LLM credentials; if credentials are missing, the source is still saved to disk before quickstart reports the compile failure, so your content is preserved and you can run `llmwiki compile` manually once credentials are configured.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--review` | Queue generated pages as candidates in `.llmwiki/candidates/` instead of writing directly to `wiki/`. Viewer handoff is skipped in review mode. After the run, use `llmwiki review list` to inspect candidates. |
+| `--no-open` | Skip the viewer handoff after compile. The wiki is compiled but the browser does not open. |
+| `--provider <name>` | Override `LLMWIKI_PROVIDER` for this invocation only (e.g. `openai`, `ollama`, `claude-agent`). |
+| `--lang <code>` | Generate wiki content in the specified language (e.g. `zh-CN`, `Japanese`, `ja`). Equivalent to setting `LLMWIKI_OUTPUT_LANG` for this run. |
+| `--concurrency <n>` | Maximum LLM calls run in parallel during the compile step (extraction and page generation). Overrides `LLMWIKI_COMPILE_CONCURRENCY`; defaults to `5`, clamped to `1`–`50`. Useful when quickstarting a large source. |
+| `--json` | Emit one machine-readable JSON envelope on stdout instead of human output. Implies `--no-open`; option warnings remain visible on stderr. The envelope includes `ingest`, `compile`, and `viewer` sub-objects plus a `next` recommended action. |
+
+### Examples
+
+```bash
+# First-run demo: ingest a Wikipedia article and open the wiki
+llmwiki quickstart https://en.wikipedia.org/wiki/Andrej_Karpathy
+
+# Ingest a local file, compile, skip the viewer
+llmwiki quickstart ./notes.md --no-open
+
+# Ingest and compile but queue pages for review before writing
+llmwiki quickstart ./paper.pdf --review
+
+# Ingest and compile in Chinese
+llmwiki quickstart https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture) --lang zh-CN
+
+# Quickstart a large source with more parallel LLM calls
+llmwiki quickstart ./long-handbook.md --concurrency 12
+
+# Machine-readable output for agent consumption
+llmwiki quickstart ./brief.md --json
+```
+
+<Tip>
+After ingesting sources, run `llmwiki next` to get a recommended next action tailored to your project's current state - it reads your `sources/`, `wiki/`, and candidate queue to suggest whether you should compile, review candidates, run lint, or query.
+</Tip>

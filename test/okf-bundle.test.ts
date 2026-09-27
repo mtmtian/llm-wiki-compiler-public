@@ -1,0 +1,101 @@
+/**
+ * @file Integration tests for the OKF bundle writer.
+ *
+ * Verifies that buildOkfBundle produces a conformant, path-confined bundle:
+ * index.md at the root, concept docs under their page directory, reference
+ * files copied under references/, stale pages removed on re-export, and
+ * path-traversal slugs rejected.
+ */
+import { describe, it, expect, beforeEach } from "vitest";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, access } from "fs/promises";
+import { tmpdir } from "os";
+import path from "path";
+import { buildOkfBundle } from "../src/export/okf/bundle.js";
+import { safeRefName } from "../src/export/okf/mapping.js";
+import type { ExportPage } from "../src/export/types.js";
+
+let root: string;
+beforeEach(async () => {
+  root = await mkdtemp(path.join(tmpdir(), "okf-"));
+  await mkdir(path.join(root, "sources"), { recursive: true });
+  await writeFile(path.join(root, "sources", "a.md"), "# A\nsource text", "utf-8");
+});
+
+function page(over: Partial<ExportPage> = {}): ExportPage {
+  return {
+    title: "RAG", slug: "rag", pageDirectory: "concepts", path: "wiki/concepts/rag.md",
+    summary: "Grounded.", sources: ["a.md"], tags: [], createdAt: "x", updatedAt: "y",
+    links: [], body: "Body ^[a.md:1-3]", kind: "concept",
+    citations: [{ file: "a.md", start: 1, end: 3 }], contentHash: "h", sourceHashes: [], ...over,
+  } as ExportPage;
+}
+
+describe("buildOkfBundle", () => {
+  it("writes a conformant bundle: index.md, concepts/<slug>.md, references/<source>.md", async () => {
+    const out = path.join(root, "bundle");
+    const written = await buildOkfBundle(root, [page()], out);
+    expect(written.some((p) => p.endsWith("index.md"))).toBe(true);
+    const doc = await readFile(path.join(out, "concepts", "rag.md"), "utf-8");
+    expect(doc).toMatch(/type:\s*concept/);
+    expect(await readdir(path.join(out, "references"))).toContain(safeRefName("a.md"));
+  });
+
+  it("clears stale files from a prior export (removed page is gone)", async () => {
+    const out = path.join(root, "bundle");
+    await buildOkfBundle(root, [page(), page({ slug: "gone", title: "Gone" })], out);
+    await access(path.join(out, "concepts", "gone.md")); // exists after first export
+    await buildOkfBundle(root, [page()], out);           // re-export without "gone"
+    await expect(access(path.join(out, "concepts", "gone.md"))).rejects.toThrow();
+  });
+
+  it("copies cited sources under references/ with safe flat names (no traversal/escape)", async () => {
+    await writeFile(path.join(root, "sources", "a.md"), "x", "utf-8");
+    const out = path.join(root, "bundle");
+    // A normal citation; the safe-name behavior for odd filenames is unit-tested in Group 1.
+    await buildOkfBundle(root, [page()], out);
+    const refs = await readdir(path.join(out, "references"));
+    expect(refs).toContain(safeRefName("a.md"));
+  });
+
+  it("emits no /references/ link and copies nothing for a cited source that does not exist", async () => {
+    const out = path.join(root, "bundle");
+    await buildOkfBundle(root, [page({ citations: [{ file: "ghost.md", start: 1, end: 2 }] })], out);
+    const doc = await readFile(path.join(out, "concepts", "rag.md"), "utf-8");
+    expect(doc).not.toContain("/references/");
+    expect(doc).toContain("# Citations");
+    const refs = await readdir(path.join(out, "references")).catch(() => [] as string[]);
+    expect(refs.some((r) => r.startsWith("ghost"))).toBe(false);
+  });
+
+  it("bundles both sources whose names collide under the old flat scheme, with distinct resolving links", async () => {
+    await mkdir(path.join(root, "sources", "a"), { recursive: true });
+    await writeFile(path.join(root, "sources", "a", "b.md"), "nested-bytes", "utf-8");
+    await writeFile(path.join(root, "sources", "a__b.md"), "flat-bytes", "utf-8");
+    const out = path.join(root, "bundle");
+    const p = page({ citations: [{ file: "a/b.md" }, { file: "a__b.md" }] });
+    await buildOkfBundle(root, [p], out);
+    const doc = await readFile(path.join(out, "concepts", "rag.md"), "utf-8");
+    const links = [...doc.matchAll(/\(\/references\/([^)]+)\)/g)].map((m) => m[1]);
+    expect(new Set(links).size).toBe(2);
+    const refs = await readdir(path.join(out, "references"));
+    expect(refs.length).toBe(2);
+    for (const link of links) expect(refs).toContain(link);
+  });
+
+  it("does not write a page outside the bundle dir", async () => {
+    const out = path.join(root, "bundle");
+    // A pathological `../escape` slug normalizes to a path INSIDE the bundle (escape.md at
+    // its root) under bundle-level confinement, so it no longer throws — but the
+    // security property that still holds is that NOTHING is written outside the bundle.
+    await buildOkfBundle(root, [page({ slug: "../escape" })], out);
+    await expect(access(path.join(out, "..", "escape.md"))).rejects.toThrow();
+  });
+
+  it("rejects a page whose pageDirectory escapes the bundle", async () => {
+    const out = path.join(root, "bundle");
+    await expect(
+      buildOkfBundle(root, [page({ pageDirectory: "../../evil" as ExportPage["pageDirectory"] })], out),
+    ).rejects.toThrow();
+    await expect(access(path.join(root, "..", "evil"))).rejects.toThrow();
+  });
+});

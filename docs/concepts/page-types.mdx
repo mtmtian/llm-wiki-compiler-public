@@ -1,0 +1,112 @@
+---
+title: "Wiki Page Kinds: concept, entity, comparison, overview"
+sidebarTitle: "Page Types"
+description: "Learn the four page kinds - concept, entity, comparison, overview - their lint expectations, and the epistemic metadata every compiled page can carry."
+---
+
+Without typed pages, a compiled wiki quickly becomes a flat list of topics with no signal about what role each page plays. A page about "Transformer" could be a conceptual explanation, a specific model card for GPT-4, a side-by-side of Transformer vs. RNN, or a domain map tying together all attention-related pages. llmwiki's four page kinds give the compiler - and you - a vocabulary for these distinctions. Each kind carries different linting expectations (such as minimum wikilink counts you can configure in `schema.json`), surfaces differently in the local viewer, and participates differently in the review policy.
+
+## The Four Page Kinds
+
+<CardGroup cols={2}>
+  <Card title="concept" icon="lightbulb">
+    A standalone idea, technique, or pattern. This is the default kind and the most common output of compilation. Use it for abstract or generalizable knowledge: algorithms, design patterns, terminology, theoretical frameworks. A concept page explains *what something is* and links to related concepts.
+
+    **Examples:** `self-attention`, `knowledge-compilation`, `incremental-compilation`
+  </Card>
+  <Card title="entity" icon="building">
+    A specific, named thing that exists in the world - a person, organization, product, model, or artifact. Entity pages are about *particular instances* rather than abstract patterns. They carry unique identifying information and often link outward to the concepts they instantiate.
+
+    **Examples:** `andrej-karpathy`, `gpt-4`, `anthropic`, `attention-is-all-you-need`
+  </Card>
+  <Card title="comparison" icon="arrows-left-right">
+    A side-by-side analysis of two or more concepts or entities along shared dimensions. Comparison pages exist to answer contrastive questions: "How does X differ from Y?" A well-formed comparison page links to every subject it compares and uses parallel structure.
+
+    **Examples:** `rag-vs-llmwiki`, `transformer-vs-rnn`, `bm25-vs-dense-retrieval`
+  </Card>
+  <Card title="overview" icon="map">
+    A map page that connects several related concepts in a domain. Overview pages are often seeded by `schema.json` rather than extracted directly from a source. They provide entry points into a topic cluster and link outward to the concept and entity pages that belong to that domain.
+
+    **Examples:** `retrieval-augmented-generation-overview`, `attention-mechanisms-overview`
+  </Card>
+</CardGroup>
+
+<Note>
+  Page kinds are enforced by the optional `.llmwiki/schema.json` file. Projects without a schema file treat every page as `kind: concept` by default. Run `llmwiki schema init` to create a starter schema, or `llmwiki schema show` to inspect the resolved policy for your project.
+</Note>
+
+## Compiled Page Frontmatter
+
+Every compiled page carries YAML frontmatter. Here is a representative example showing all standard fields:
+
+```yaml
+---
+title: Knowledge Compilation
+summary: Techniques for converting knowledge representations into forms that support efficient reasoning.
+kind: concept
+sources:
+  - knowledge-compilation.md
+confidence: 0.82
+provenanceState: merged
+contradictedBy:
+  - slug: probabilistic-reasoning
+createdAt: "2026-04-05T12:00:00Z"
+updatedAt: "2026-04-05T12:00:00Z"
+---
+```
+
+## Epistemic Metadata
+
+<CardGroup cols={2}>
+  <Card title="confidence" icon="gauge">
+    A number between `0` and `1` representing the LLM's reported confidence in the synthesized page. Higher values indicate the page is well-supported by its sources with minimal ambiguity. Lower values - by default, below `0.5` - cause `llmwiki lint` to flag the page with a `low-confidence` warning and, if the review policy is active, hold the page for review rather than writing it to `wiki/`.
+  </Card>
+  <Card title="provenanceState" icon="route">
+    A categorical label describing how the page's content was produced:
+
+    - `extracted` - derived directly from one source
+    - `merged` - synthesized from multiple sources
+    - `inferred` - the LLM drew a conclusion not stated explicitly in any source
+    - `ambiguous` - sources gave conflicting signals; the page reflects the compiler's best synthesis
+
+    When multiple sources merge into one slug, the reconciled state is always `merged`.
+  </Card>
+</CardGroup>
+
+### The `contradictedBy` Field
+
+`contradictedBy` is a list of page slugs whose content is in tension with this page. When the LLM detects that two pages make conflicting claims about the same subject, it populates `contradictedBy` on one or both pages.
+
+```yaml
+contradictedBy:
+  - slug: probabilistic-reasoning
+```
+
+A non-empty `contradictedBy` triggers a `contradicted-page` lint warning and, if enabled in the review policy, holds the page as a candidate for human review.
+
+## How Metadata Affects the Review Policy
+
+The review policy in `.llmwiki/config.json` uses epistemic metadata to decide whether a compiled page is written directly to `wiki/` or held in `.llmwiki/candidates/` for review. Any enabled hold mode that fires on a page's metadata causes it to be held:
+
+<Tabs>
+  <Tab title="low-confidence">
+    Pages with `confidence` below `lowConfidenceThreshold` (default `0.5`) are held. Pages with no `confidence` field are also held by default - set `"treatMissingConfidenceAs": "ok"` in `config.json` to let them pass.
+  </Tab>
+  <Tab title="contradicted">
+    Pages with a non-empty `contradictedBy` array are held, regardless of their confidence score.
+  </Tab>
+  <Tab title="schema-violating">
+    Pages that fail a schema cross-link rule - for example, a `concept` page with fewer wikilinks than the schema's `minWikilinks` requires - are held.
+  </Tab>
+  <Tab title="provenance-violating">
+    Pages with broken or malformed citations - source files that don't exist, line ranges that are impossible or out of bounds - are held.
+  </Tab>
+</Tabs>
+
+<Warning>
+  The review policy is fail-closed. An unknown hold mode or a corrupt `config.json` aborts the compile rather than silently disabling review. If you edit `config.json` manually, verify it with `llmwiki schema show` before the next compile.
+</Warning>
+
+When multiple sources merge into one slug, epistemic metadata is reconciled: the `confidence` takes the minimum across all contributing sources, `provenanceState` is set to `merged`, and `contradictedBy` is the deduplicated union of all contributing sources' contradiction lists.
+
+For more detail on the schema layer and the review policy configuration format, see [Schema](/configuration/schema) and [Review Policy](/configuration/review-policy).

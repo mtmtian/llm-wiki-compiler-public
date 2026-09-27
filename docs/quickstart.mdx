@@ -1,0 +1,157 @@
+---
+title: "llmwiki Quickstart: Compile Your First Wiki in Minutes"
+sidebarTitle: "Quickstart"
+description: "Install llmwiki, set your API key, and run llmwiki quickstart to compile a URL or local file into a browsable, interlinked wiki in minutes."
+---
+
+This quickstart walks you through installing llmwiki, setting your API key, and running `llmwiki quickstart` against a real source - a URL or a local file - to produce a browsable, interlinked wiki in a single command. By the end you'll have a compiled wiki you can query with natural language and explore in a local browser UI.
+
+<Note>
+  llmwiki requires **Node.js >= 24**. Run `node --version` to check. If you're on an older version, update via [nodejs.org](https://nodejs.org) or a version manager such as `nvm` or `fnm` before continuing.
+</Note>
+
+<Steps>
+
+  <Step title="Install llmwiki globally">
+    Install the `llm-wiki-compiler` package from npm. The package registers the `llmwiki` binary globally.
+
+    ```bash
+    npm install -g llm-wiki-compiler
+    ```
+
+    Verify the installation completed successfully:
+
+    ```bash
+    llmwiki --version
+    # or
+    llmwiki --help
+    ```
+  </Step>
+
+  <Step title="Set your API key">
+    llmwiki defaults to Anthropic. Export your API key before running any command that calls the LLM (ingest is credential-free; compile is not):
+
+    ```bash
+    export ANTHROPIC_API_KEY=sk-ant-...
+    ```
+
+    If your Anthropic-compatible gateway expects a different header, use `ANTHROPIC_AUTH_TOKEN` instead - either variable satisfies Anthropic authentication. You only need one.
+
+    ```bash
+    # Alternative: use ANTHROPIC_AUTH_TOKEN
+    export ANTHROPIC_AUTH_TOKEN=<token>
+    ```
+
+    **Already using another provider?** llmwiki supports OpenAI-compatible servers, Ollama, GitHub Copilot, and the Claude Agent SDK (which authenticates through your local Claude Code login with no separate API key). See [Provider Setup](/installation#provider-setup) or the full [Provider Configuration](/configuration/providers) reference to configure those instead.
+  </Step>
+
+  <Step title="Run llmwiki quickstart">
+    Create a new directory for your wiki, then run `llmwiki quickstart` with any supported source - a URL, a local markdown file, a PDF, or even a YouTube link:
+
+    ```bash
+    mkdir my-wiki && cd my-wiki
+
+    # Compile from a Wikipedia article
+    llmwiki quickstart https://en.wikipedia.org/wiki/Andrej_Karpathy
+
+    # Or compile from a local file
+    llmwiki quickstart ./notes.md
+    ```
+
+    `llmwiki quickstart` ingests the source, runs the two-phase LLM compile pipeline, and opens the local viewer when pages are ready. Pass `--no-open` to stop after compile without launching the viewer, or `--review` to queue generated pages as candidates instead of writing them directly to `wiki/`. For a large source, `--concurrency <n>` raises how many LLM calls the compile step runs in parallel (default 5).
+
+    Expected output after a successful compile:
+
+    ```
+    llmwiki quickstart
+    ──────────────────────
+    * Ingesting [web]: https://en.wikipedia.org/wiki/Andrej_Karpathy
+    + Ingested → sources/andrej-karpathy.md
+
+    1. Ingested source → sources/andrej-karpathy.md
+    2. Compiled wiki → 8 new, 0 skipped
+
+    Starting viewer. Press Ctrl+C to stop.
+    Viewer ready at http://127.0.0.1:3000
+    ```
+
+    The compiled pages land in `wiki/concepts/`, each with YAML frontmatter, paragraph-level citations, and `[[wikilinks]]` to related concepts.
+  </Step>
+
+  <Step title="Query the wiki">
+    Ask a natural-language question against the compiled wiki. llmwiki uses semantic chunk retrieval, BM25 reranking, and wikilink-graph expansion to build a grounded answer:
+
+    ```bash
+    llmwiki query "What terms did Andrej coin?"
+    ```
+
+    Add `--save` to write the answer back as a new wiki page, which makes it available as context for future queries:
+
+    ```bash
+    llmwiki query "What is the relationship between scaling laws and LLM training?" --save
+    ```
+  </Step>
+
+  <Step title="Browse the wiki">
+    Open the local read-only web viewer to explore your wiki with sidebar navigation, full-text search, a force-directed concept graph, and per-page citation chips:
+
+    ```bash
+    llmwiki view --open
+    ```
+
+    The viewer binds to `127.0.0.1` and is private by default. It renders `wiki/` without mutating any files - all writes go through the CLI.
+  </Step>
+
+</Steps>
+
+## Start with a domain template
+
+The default quickstart creates the classic concepts-and-queries wiki. For a typed domain project, install a template before adding content:
+
+<Tabs>
+  <Tab title="AutoSci research">
+    ```bash
+    mkdir research-wiki && cd research-wiki
+    llmwiki template inspect autosci
+    llmwiki template init autosci
+    llmwiki profile validate
+    llmwiki workflow list
+    ```
+
+    AutoSci declares papers, sources, ideas, experiments, manuscripts, methods, people, reviews, research outputs, typed relations, five workflows, seven artifact types, and the Crossref DOI connector. Continue with the [AutoSci practical guide](/guides/autosci-research-workflow).
+  </Tab>
+  <Tab title="Newsroom editorial">
+    ```bash
+    mkdir newsroom-wiki && cd newsroom-wiki
+    llmwiki template inspect newsroom
+    llmwiki template init newsroom
+    llmwiki profile validate
+    llmwiki workflow list
+    ```
+
+    Newsroom declares articles, desks, bylines, editorial relationships, and a story pipeline. It intentionally uses the same generic lifecycle substrate for a domain unrelated to research. Continue with the [Newsroom practical guide](/guides/newsroom-editorial-workflow).
+  </Tab>
+</Tabs>
+
+Template installation is intended for a new or empty typed project. The selected profile is materialized at `.llmwiki/profile.json`; the advisory template lock records install provenance but never changes validation or write authority.
+
+<Tip>
+  Not sure what to do next after setup? Run `llmwiki next` from your project directory. It inspects the current project state and recommends the single most useful follow-up command - whether that's adding more sources, recompiling after a file change, running `llmwiki lint`, or reviewing pending candidates.
+</Tip>
+
+## What's next
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book-open" href="/concepts/how-it-works">
+    Understand how llmwiki's two-phase compile pipeline, hybrid retrieval, and citation model work together.
+  </Card>
+  <Card title="Configurable Lifecycle Profiles" icon="diagram-project" href="/concepts/configurable-lifecycle-profiles">
+    Learn how profiles define typed domain behavior while core remains generic.
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/cli/ingest">
+    Full documentation for every `llmwiki` command, flag, and option.
+  </Card>
+  <Card title="Open Knowledge Format" icon="share-nodes" href="/guides/open-knowledge-format">
+    Export your wiki as an OKF bundle or import an external bundle through review.
+  </Card>
+</CardGroup>

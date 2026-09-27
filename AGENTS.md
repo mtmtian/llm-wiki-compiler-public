@@ -1,0 +1,66 @@
+# llmwiki
+
+A knowledge compiler CLI. Raw sources in, interlinked wiki out.
+
+## Development Guidelines
+
+### Code Style & Standards
+
+- Code files (TypeScript, Python, JavaScript, shell, SQL) must be smaller than 400 lines excluding comments. Once 400 is exceeded, initiate a refactor. **Markdown and other prose/config files (`.md`, `.mdx`, `.yaml`, `.json`, `.toml`) are exempt** — long planning documents, roadmaps, and reference catalogs are allowed to grow as substance requires.
+- Functions must be smaller than 40 lines excluding comments and the catch/finally blocks of try/catch sections. If a function exceeds that, refactor it.
+- test files must be smaller than 400 lines excluding comments. Once 400 is exceeded, split the tests into multiple files.
+- tests must be smaller than 40 lines excluding comments and the catch/finally blocks of try/catch sections. If a test exceeds that, refactor it, or separate it into multiple tests.
+
+
+### clean code rules
+
+- Meaningful Names: Name variables and functions to reveal their purpose, not just their value.
+- One Function, One Responsibility: Functions should do one thing.
+- Avoid Magic Numbers: Replace hard-code values with named constants to give them meaning.
+- Use Descriptive Booleans: Boolean names should state a condition, not just its value.
+- Keep Code DRY: Duplicate code means duplicate bugs. Try and reuse logic where it makes sense.
+- Avoid Deep Nesting: Flatten your code flow to improve clarity and reduce cognitive load.
+- Comment Why, Not What: Explain the intention behind your code, not the obvious mechanics.
+- Limit Function Arguments: Too many parameters confuse. Group related data into objects.
+- Code Should Be Self-Explanatory: Well-written code needs fewer comments because it reads like a story.
+
+### Comments and Documentation
+
+- include a substantial JSDoc comment at the top of each file. For python files, use google style docstrings
+- Write clear comments for complex logic
+- Document public APIs and functions
+- Use JSDoc comments for functions
+- Keep comments up-to-date with code changes
+- Document any non-obvious behavior
+
+### Pre-Commit Checks
+
+Before committing any work, and before considering any task complete, you must:
+
+1. `npx tsc --noEmit` — type-check passes
+2. `npm run build` — build succeeds
+3. `npm test` — all tests pass
+4. `fallow` — run the fallow codebase health analyzer. Fix all issues it reports (dead code, duplication, complexity). Use `fallow fix --dry-run` to preview auto-fixes, then `fallow fix --yes` to apply. Fix any remaining issues manually. Do not commit until fallow reports no issues.
+
+### PR, Review, and Merge (All Machines)
+
+The shared procedure is [CI.md — PR and merge workflow](CI.md#4-两台机器共用的-pr-与合并流程).
+Local agent rules supplement this repository policy; the same order applies on every machine:
+
+1. Validate and commit the complete change, push it, and create a PR against `personal/stable` on this fork (`main` upstream). Preserve other machines' branches and changes.
+2. **After the PR exists**, run `thermo-nuclear-code-quality-review` on the committed PR HEAD against its target base. Review the complete PR diff and necessary related code. Record the reviewer, full HEAD/base SHAs, conclusion, remaining findings, and validation evidence in the PR description or a linked review.
+3. Resolve blockers before merging. Code changes require affected checks and a renewed review of the final committed HEAD. If the base moves, incorporate the new base into the PR branch and refresh review/CI evidence. Old approvals and old green runs do not authorize the new combination.
+4. Wait for the latest automatic PR `CI Gate` and all of its jobs to succeed. Failed, pending, cancelled, skipped, missing, or manual checks do not qualify. Do not weaken checks or retry unexplained failures until green.
+5. With existing user authorization to merge, use **`npm run pr:merge -- <PR> --reviewed-head <SHA> --reviewed-base <SHA>`**. Add `--dry-run` to inspect readiness without merging. The SHAs attest a completed, unblocked thermo review; the command checks GitHub evidence, not review quality. Do not bypass this flow with direct pushes, the GitHub merge button, `--admin`, or raw merge commands.
+
+This repository uses GitHub Actions and a shared local merge guard without a plan upgrade.
+The guard cannot enforce server-side branch protection or stop a caller from bypassing it;
+see `CI.md` for the remaining concurrency limits. These rules do not grant permission to merge.
+
+## General Rules
+
+- Wiki extraction and curation follow [KNOWLEDGE-POLICY.md](KNOWLEDGE-POLICY.md): retain durable knowledge and necessary evidence, and retire reviewed redundant process records without creating history archives.
+
+- First think through the problem, read the codebase for relevant files.
+- Make every task and code change you do as simple as possible. We want to avoid making any massive or complex changes. Every change should impact as little code as possible. Everything is about simplicity.
+- Never speculate about code you have not opened. If the user references a specific file, you MUST read the file before answering. Make sure to investigate and read relevant files BEFORE answering questions about the codebase. Never make any claims about code before investigating unless you are certain of the correct answer - give grounded and hallucination-free answers.

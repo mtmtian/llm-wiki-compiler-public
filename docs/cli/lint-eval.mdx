@@ -1,0 +1,280 @@
+---
+title: "llmwiki lint and eval - Wiki Quality Checks and Metrics"
+sidebarTitle: "Lint & Eval"
+description: "llmwiki lint finds broken links, stale pages, and citation errors. llmwiki eval measures health scores and citation quality with CI-gateable thresholds."
+---
+
+A compiled wiki is only as useful as it is accurate. Over time, sources change, pages accumulate broken citations, and the gap between your wiki and your source material widens. `llmwiki lint` gives you an immediate, no-LLM-required report on what's wrong; `llmwiki eval` goes further, producing a quantitative health score you can gate on in CI.
+
+Running both regularly - especially after a `compile` or `refresh` - keeps your wiki trustworthy and prevents quality debt from quietly building up.
+
+---
+
+## llmwiki lint
+
+`llmwiki lint` runs a suite of rule-based checks against your compiled wiki without making any LLM calls. Every rule is deterministic: it reads the wiki files and sources on disk and reports what it finds.
+
+```bash
+llmwiki lint
+```
+
+### What lint checks
+
+| Rule | Severity | What it flags |
+|------|----------|---------------|
+| Broken wikilinks | Error | `[[links]]` that don't resolve to any page or alias |
+| Duplicate concepts | Error | Multiple pages that represent the same concept |
+| Broken citations | Error | `^[source.md]` or `^[source.md:42-58]` markers pointing to missing files, impossible line ranges (e.g. line `0`, or `8-3`), or ranges past end-of-file |
+| Malformed citations | Error | Citation markers that don't parse as valid source references |
+| Empty pages | Warning | Pages with no prose body after frontmatter |
+| Orphaned pages | Warning | Pages whose every owning source was deleted since the last compile |
+| Pending embeddings | Warning | Pages awaiting embedding refresh, or an unreadable pending marker |
+| Quarantined embeddings | Warning | Pages whose automatic embedding retries have stopped, or an unreadable quarantine marker |
+| Stale pages | Warning | Pages whose sources exist on disk but have changed since the last compile |
+| Low confidence | Warning | Pages with a `confidence` frontmatter value below the configured threshold |
+| Contradicted pages | Warning | Pages that declare `contradictedBy` entries |
+| Excess inferred paragraphs | Warning | Pages with too many prose paragraphs that carry no `^[...]` citation marker |
+| Schema cross-link violations | Warning | Pages that don't meet the `minWikilinks` requirement for their `kind` |
+
+### Stale vs. orphaned
+
+These two states are often confused:
+
+- **Stale** - the source file still exists, but its content has changed since the last compile. The page may be out of date.
+- **Orphaned** - every source that contributed to the page has been deleted. The page has no living owner.
+
+Both are surfaced by `llmwiki lint` and are also visible in the local viewer, JSON export, and MCP tools. Use `llmwiki refresh --stale` to repair stale and orphaned pages with a targeted recompile.
+
+### Stopped embedding retries
+
+The `quarantined-embeddings` rule keeps stopped retries visible after the initial
+compile warning. Its `embeddings-refresh-quarantined` diagnostic reports the
+distinct page count across quarantine and exhausted pending entries. These pages
+may be missing from semantic search; another unchanged compile will not reset
+their budgets. Follow [embedding retry recovery](/configuration/environment-variables#embedding-retries-and-quarantine)
+after fixing the provider or page. Lint only inspects these markers; it never
+re-queues pages or calls an embedding provider.
+
+### Lint cache
+
+After every run, lint writes a summary to `.llmwiki/last-lint.json`, including a per-rule breakdown of which rules produced error or warning findings, how many files each one touched, and its most-flagged file. The local viewer (`llmwiki view`) reads this file without re-running lint: the sidebar's **Health & lint** entry carries the total finding count as a badge, and the **Health & lint** screen (`#/health`) shows the error/warning totals with the per-rule breakdown beneath them. The MCP `lint_wiki` tool returns the same structured diagnostics programmatically.
+
+Treat the file as generated output, not as something to edit. Readers reject a malformed cache outright and report it as "lint has never run". A cache that parses but whose per-rule rows contradict the error and warning totals - rows that do not sum back to those totals, or a row flagging more files or more findings in one file than the rule produced - keeps its totals and loses only the breakdown, so the viewer shows accurate counts without a bar that disagrees with them. Re-run `llmwiki lint` to restore the breakdown.
+
+### Exit code
+
+`llmwiki lint` exits with code `1` if any **errors** are found. Warnings and info do not affect the exit code, but they are printed. This makes lint suitable for CI gating when you want to block on hard errors only.
+
+### Recommendations
+
+`llmwiki next` reads the lint output to surface actionable recommendations - for example, suggesting `llmwiki refresh --stale` when stale pages are detected, or pointing you toward a specific broken citation to fix.
+
+---
+
+## llmwiki eval
+
+`llmwiki eval` measures your wiki's quality with a quantitative health score and tracks changes over time. It builds on the lint rules but adds citation coverage, corpus statistics, optional LLM-as-judge support scoring, and regression deltas against the previous run.
+
+```bash
+llmwiki eval                   # fast suite (default)
+llmwiki eval --suite full      # fast + LLM-as-judge citation support
+```
+
+### Suites
+
+| Suite | What runs | LLM credentials needed? |
+|-------|-----------|------------------------|
+| `fast` (default) | Health score, per-page health distribution, graph health, citation coverage and precision, source utilization, corpus stats, regression deltas | No |
+| `full` | Everything in `fast`, plus LLM-as-judge citation support scoring for a sample of claim/source pairs | Yes |
+
+<Note>
+  The `fast` suite is safe to run in any environment - including CI pipelines with no API key configured. Reserve `--suite full` for periodic deep checks where you want LLM-judged support scores.
+</Note>
+
+### What eval measures
+
+**Health score (0–100)**
+Aggregates all lint rules into a single number. Errors (broken citations, broken wikilinks, duplicate concepts) cost more than warnings. A score of 100 means the lint pass found nothing.
+
+**Page health distribution**
+Breaks the corpus health score down per page, so you can see *which* pages need attention rather than just that something is wrong. Each page is scored by summing the lint deductions attributed to that page, using the same weights as the overall health score, then sorted into four tiers: `healthy` (90–100), `adequate` (70–89), `needs_work` (50–69), and `broken` (0–49). The report shows the tier counts plus the worst pages with their top issues, so a maintainer knows where to start. The full per-page list is available in the JSON report.
+
+**Citation coverage**
+The fraction of prose paragraphs that carry at least one `^[...]` citation marker. Higher is better; uncited prose is harder to verify and maintain.
+
+**Citation precision**
+The fraction of citations that point to source files that actually exist on disk. A precision below 100% means some citations are already broken.
+
+**Citation support (full suite only)**
+Samples up to N `(claim, source span)` pairs and asks a judge model to score each on a 0–2 scale: `0` = unsupported, `1` = partially supported, `2` = fully supported. Results are cached in `.llmwiki/eval/citation-cache.jsonl` so subsequent runs only re-judge new pairs.
+
+**Source utilization rate**
+The fraction of a page's valid sources that are actually cited somewhere in the page body. A low rate suggests sources were ingested but their content didn't make it into the compiled wiki.
+
+**Claim-level citation rate**
+The fraction of citations that are pinned to specific line ranges (e.g. `^[source.md:42-58]`) rather than citing a whole file. Higher means tighter, more verifiable provenance.
+
+**Graph health**
+A topology view of the wiki's `[[wikilink]]` graph, computed from the same graph the local viewer renders. Reports unreferenced pages (no inbound links), the number of weakly connected components, average indegree, the top hub pages by total degree, and any dangling wikilink targets (links pointing at pages that don't exist). This is informational - a page with no inbound links is not necessarily wrong - and does not affect the health score.
+
+**Corpus stats**
+Page count, source count, total wiki characters, and embedding counts - appended to `.llmwiki/eval/history.jsonl` for trend tracking.
+
+**Regression deltas**
+The current run is diffed against the previous entry in `history.jsonl`. Improvements and regressions in every metric are displayed in the report.
+
+### Evaluate pending drafts before approval
+
+Use the candidate selection to inspect drafts without making them live:
+
+```bash
+llmwiki compile --review
+llmwiki review list
+llmwiki eval --candidates                         # evidence inventory, no model calls
+llmwiki eval --candidates --suite full --sample 20 --out json
+llmwiki review show <id>                          # inspect the draft before deciding
+```
+
+`--candidates` selects all pending concept/query drafts instead of live pages.
+Typed profile candidates, malformed records, and drafts without prose are listed
+as skipped. A draft whose target directory is not recognized is assessed as the
+concepts page that approval would write. It does not run live-page health metrics, thresholds, or regression
+deltas. Without this flag, evaluation continues to select live pages as before.
+
+Each candidate reference includes its ID, target, generation time, SHA-256 of the
+exact candidate JSON read (`revision`), and SHA-256 of its full page (`contentHash`).
+An ID alone is not a revision: a later compile can replace the same pending ID.
+Reports describe the bytes read during that run, not a guarantee that those bytes
+are still pending when you inspect or approve them later.
+
+Evidence is **current text under `sources/`**, not a retained generation snapshot.
+The report includes the source hash, recorded generation hash when available, and
+the excerpt actually judged. A source changed since generation is `unjudgeable`:
+regenerate the candidate or inspect the changed evidence yourself. Legacy/imported
+drafts without generation hashes are marked `unrecorded`; judgments concern their
+current evidence and do not certify the original evidence. Each source is read
+once per run; concurrent edits after that read require a new evaluation.
+
+Full mode samples at most `--sample` eligible claim/excerpt pairs across the queue
+(default 20), using deterministic content hashes. One paragraph can produce several
+pairs. Unsampled pairs have `not-sampled` status; fast mode leaves them `eligible`.
+Missing sources, unusable or out-of-bounds ranges, empty excerpts, and uncited prose
+remain explicit `unjudgeable` observations, never positive scores. This uses the
+existing prose-paragraph metric, not exhaustive coverage of headings, lists, code,
+or every factual assertion.
+
+Scores are 0–2 with reasons. `coverage` reports prose/citation counts, eligible,
+selected and judged pairs, unjudgeable observations, and judge errors. `meanScore`
+is `null` without judgments and otherwise describes **only the judged sample**.
+Judge failures retain a report with `judge-error` observations and exit code 1.
+Missing credentials are checked once, before judging, with configuration guidance
+in `judgeUnavailable`. Citation judging does not require an embedding backend.
+Unjudgeable evidence alone does not cause a nonzero exit: this is an advisory report,
+not an approval gate or freshness certification.
+
+Full mode sends sampled claims and excerpts to your configured model and can incur
+provider charges (including retries). Compatible verdicts reuse the citation cache;
+candidate revision, evidence, judge prompt/tool, model, provider, endpoint, or request
+option changes invalidate reuse. Agent-backed providers use per-run cache identities
+because their external runtime configuration is opaque. No credentials enter these
+fingerprints. A favorable report **never approves a candidate**.
+Re-staging a candidate changes its revision and re-judges even unchanged paragraphs;
+this conservative cache policy can incur additional charges.
+
+Only `.llmwiki/eval/candidates-latest.json` and, for new judgments, the shared
+`citation-cache.jsonl` are written. These files contain claim/source text: treat
+them with the same care as your sources. Pending/archived candidates, live pages,
+compile state, and live evaluation history are unchanged. `eval report` and
+`eval history` still show live-page runs; read the candidate JSON or rerun the command
+for candidate results. `eval cache clear` clears both live and candidate verdicts.
+`eval judgements` and `eval cache show` include candidate rows named
+`candidate:<id>@<revision>`. Agent-backed runs retain results in the candidate report
+only, without appending never-reusable verdicts to the shared cache.
+
+### Eval subcommands
+
+```bash
+llmwiki eval report                         # re-print the most recent report
+llmwiki eval history                        # trend table of all past runs
+llmwiki eval history --n 10                 # limit to the last 10 entries
+llmwiki eval judgements                     # all cached citation judgements
+llmwiki eval judgements --score 0           # only unsupported citations
+llmwiki eval judgements --score 2           # only fully-supported citations
+llmwiki eval judgements --page some-slug    # filter to one page
+llmwiki eval cache show                     # score distribution + top-cited pages
+llmwiki eval cache clear                    # wipe the citation judgement cache
+```
+
+### CI thresholds
+
+Add `.llmwiki/eval/thresholds.yaml` to your project to define minimum acceptable scores. When any threshold is violated, `llmwiki eval` exits with a non-zero code and lists the violations in the report - making it suitable for CI gating.
+
+```yaml
+# .llmwiki/eval/thresholds.yaml
+health_score: 85
+citation_coverage_percent: 70
+citation_precision_percent: 90
+citation_support_mean: 1.4        # only checked when --suite full
+source_utilization_rate: 0.9      # min fraction of valid sources cited per page
+source_warnings_max: 0            # max excluded sources (e.g. out-of-tree symlinks)
+claim_level_citation_rate: 0.5    # min fraction of citations with line ranges
+```
+
+<Tip>
+  Start with relaxed thresholds (e.g. `health_score: 60`) and tighten them as you improve coverage. The trend table from `llmwiki eval history` helps you see where you stand over time before committing to a strict gate.
+</Tip>
+
+<Warning>
+  `citation_support_mean` is only evaluated when you run `--suite full`. If you set this threshold but always run the fast suite in CI, the threshold is silently skipped.
+</Warning>
+
+### Artifacts
+
+Eval writes the following files under `.llmwiki/eval/`:
+
+```
+.llmwiki/eval/
+  history.jsonl          one JSON line per eval run (trend data)
+  citation-cache.jsonl   one JSON line per cached citation judgement
+  thresholds.yaml        optional CI threshold configuration
+```
+
+---
+
+## llmwiki rules
+
+The `rules` subcommands let you extract and manage machine-actionable rule candidates from your sources. Rule candidates are structured records that can be exported for a downstream rule importer - separate from the prose wiki pages produced by `compile`.
+
+```bash
+llmwiki rules extract          # extract rule candidates from changed sources (requires LLM)
+llmwiki rules list             # list pending rule candidates
+llmwiki rules approve <id>     # approve a candidate (flips status to approved)
+llmwiki rules reject <id>      # reject and archive a candidate
+llmwiki rules export           # write approved candidates to dist/exports/rule-candidates.json
+llmwiki rules export --scope all       # include proposed candidates too
+llmwiki rules export --scope proposed  # only proposed candidates
+```
+
+`rules extract` runs the LLM over your changed sources to identify rule-like statements - constraints, invariants, policies, and similar structured knowledge. Candidates land in `.llmwiki/rule-candidates/` as JSON records. `rules list` shows pending candidates with their confidence score and proposed title so you can decide what to approve.
+
+All mutations (`approve`, `reject`, `extract`) run under `.llmwiki/lock` to serialize cleanly against concurrent operations.
+
+Set `LLMWIKI_OUTPUT_LANG` to choose the language for rule extraction:
+
+```bash
+LLMWIKI_OUTPUT_LANG=Japanese llmwiki rules extract
+```
+
+Changing or clearing this setting re-extracts unchanged sources. Repeating the
+same setting skips already-processed sources. Each source's successful selection
+is stored in `.llmwiki/rule-state.json`; a failed source is retried on the next
+run. Older cursors without a language value mean the model's default language.
+Re-extraction preserves human approvals and rejections for existing candidate
+ids; differently worded rules can produce additional candidates to review.
+Compile-only instructions and Sources-section preferences do not affect rules.
+
+<Note>
+  `rules export` defaults to `--scope approved`. Exported candidates are written to `dist/exports/rule-candidates.json` as a JSON array, ready for a downstream rule importer.
+</Note>
+
+See [Review Policy](/configuration/review-policy) for the related concept-review workflow that gates generated wiki pages in the same way.

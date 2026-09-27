@@ -1,0 +1,170 @@
+---
+title: "Open Knowledge Format Round Trip"
+sidebarTitle: "Open Knowledge Format"
+description: "Export llmwiki projects as Open Knowledge Format bundles, import external OKF bundles safely, and preserve provenance through re-export."
+---
+
+Open Knowledge Format (OKF) is a markdown-bundle shape for sharing compiled knowledge between tools. llmwiki can act as both a producer and a consumer:
+
+- `llmwiki export --target okf` writes a portable OKF bundle from your compiled wiki.
+- `llmwiki import --okf <dir>` reads an OKF bundle and stages its documents for review by default.
+- Re-export preserves foreign producer keys, raw foreign types, and safe original bundle paths while refreshing llmwiki's own metadata.
+- Non-default profile projects export profile identity, typed relation metadata,
+  and workflow run summaries in the bundle-level `x-llmwiki` block.
+- SDK and MCP callers can export/import OKF without shelling out; MCP import is staging-only.
+
+Use OKF when you want to exchange compiled knowledge with another tool or project. Use JSON export when you are feeding a programmatic importer that expects llmwiki's JSON bridge contract.
+
+---
+
+## Export a bundle
+
+```bash
+llmwiki compile
+llmwiki export --target okf --out ./dist/knowledge-bundle
+```
+
+The bundle contains:
+
+```text
+knowledge-bundle/
+  index.md
+  concepts/<slug>.md
+  queries/<slug>.md
+  <foreign/path>.md
+  references/<source-file>.md
+  log.md
+```
+
+Native llmwiki pages export under `concepts/<slug>.md` or `queries/<slug>.md`. Imported foreign pages re-export to their original bundle-relative `.md` path when that path is safe, URL-safe, non-reserved, and uncontested. If the original path is unsafe or collides, llmwiki falls back to the slug path and returns a warning.
+
+Each page document includes OKF standard frontmatter plus an `x-llmwiki` block with compiler metadata:
+
+```yaml
+type: concept
+title: Retrieval-Augmented Generation
+description: Combining retrieval with generation to ground answers.
+tags:
+  - rag
+x-llmwiki:
+  schemaVersion: "0.1"
+  pageDirectory: concepts
+  contentHash: "..."
+  sources:
+    - rag-notes.md
+  freshnessStatus: fresh
+```
+
+`type` is the page's `kind` when it declares one, `query` for pages under `wiki/queries/`, and `concept` otherwise. `timestamp` is the page's `updatedAt`, falling back to its `createdAt`; a page that declares neither exports no `timestamp` at all, so the bundle never records a time the page did not have.
+
+The body is markdown. llmwiki rewrites `[[wikilinks]]` to OKF-style links and appends a human-readable `# Citations` section. Structured citation data also lives under `x-llmwiki.citations`.
+
+For non-default projects, `index.md` also carries bundle-level `x-llmwiki`
+metadata for the active profile, relation entries, and workflow run summaries.
+That metadata is exchange data, not an install command: importing the bundle
+does not replace the receiving project's profile.
+
+---
+
+## Import a bundle safely
+
+```bash
+llmwiki import --okf ./dist/knowledge-bundle
+llmwiki review list
+llmwiki review show <candidate-id>
+llmwiki review approve <candidate-id>
+```
+
+Default import is review-gated. This is the right mode for third-party bundles, partner bundles, and any bundle whose contents you have not independently verified.
+
+Imported candidates show:
+
+- The candidate ID and slug
+- `reviewMode: imported`
+- The `imported-okf` hold reason
+- The original OKF path
+- The mapped page body
+- The typed entity target when the receiving profile recognizes the imported
+  document as one of its entity types
+
+Approving an imported candidate writes the page into `wiki/concepts/` or `wiki/queries/` without running an LLM.
+
+In a non-default profile project, typed OKF docs are approved into their profile
+entity directories, such as `wiki/papers/`, after profile validation. Bundle
+relations are applied only on trusted import and only through the validated
+relation store.
+
+---
+
+## Preview before importing
+
+```bash
+llmwiki import --okf ./dist/knowledge-bundle --dry-run
+```
+
+Dry run is useful for evaluating an unfamiliar bundle. It prints the pages that would be imported, the pages that would be skipped, and the reason for each skip. It makes no writes and calls no LLM.
+
+---
+
+## Trusted import
+
+```bash
+llmwiki import --okf ./internal-bundle --trusted
+```
+
+`--trusted` writes pages directly into `wiki/` and refreshes links and indexes. Use it only for bundles whose content and provenance you already trust.
+
+<Warning>
+  OKF import reads external markdown and frontmatter. For untrusted bundles, use the default review-gated import path. `--trusted` bypasses the human review queue.
+</Warning>
+
+---
+
+## Re-export behavior
+
+When you import a foreign OKF bundle, llmwiki stores the original OKF frontmatter under imported provenance. On re-export:
+
+- Foreign raw `type` values are preserved, even when they are not llmwiki page kinds.
+- Foreign producer-specific keys are preserved.
+- Current llmwiki standard fields (`title`, `description`, `tags`, `timestamp`) are derived from the current page, so local edits are reflected.
+- `x-llmwiki` is regenerated from current llmwiki state.
+- `x-okf` is not emitted; it is an internal imported-provenance record.
+- Safe original nested paths are restored, so foreign bundle layouts can round-trip.
+- Native `[[wikilinks]]` to imported foreign pages are exported to that page's restored OKF path.
+- Profile identity, relation entries, and workflow run summaries are emitted
+  from current project state for non-default projects.
+
+This keeps the bundle honest: foreign metadata is not discarded, but stale standard fields are not blindly replayed after local edits.
+
+<Note>
+  Path restoration is conservative. Non-`.md`, URL-unsafe, reserved, escaping, or colliding foreign paths fall back to `concepts/<slug>.md` or `queries/<slug>.md` with a warning.
+</Note>
+
+---
+
+## Programmatic and agent access
+
+Use the SDK when your application owns the trust decision:
+
+```ts
+const bundle = await wiki.exportOkf({ out: "./dist/okf" });
+const preview = await wiki.importOkf("./partner-bundle", { dryRun: true });
+const staged = await wiki.importOkf("./partner-bundle");
+const written = await wiki.importOkf("./internal-bundle", { trusted: true });
+```
+
+Use MCP when an agent needs structured OKF access. The MCP server exposes `export_okf` and `import_okf`; `import_okf` is always staging-only and supports `dryRun`, so imported knowledge still requires review approval before it enters the live wiki.
+
+---
+
+## OKF versus JSON export
+
+| Use case | Recommended format |
+|----------|--------------------|
+| Exchange compiled knowledge with another OKF-aware tool | OKF |
+| Review an external knowledge bundle before merging it into your wiki | OKF import |
+| Feed the Atomic Memory bridge | JSON export with `--project-id` |
+| Load a graph or table-oriented downstream pipeline | JSON / JSON-LD / GraphML |
+| Share a human-readable portable bundle | OKF |
+
+See [Export](/cli/export) for every export target and [Import](/cli/import) for the full OKF import reference.

@@ -1,0 +1,224 @@
+/**
+ * Shared types for the llmwiki export subsystem.
+ *
+ * ExportPage is the normalised in-memory representation of a wiki page used
+ * by every export format. It is derived from the page's YAML frontmatter plus
+ * the wikilink graph extracted from the body.
+ *
+ * Trust-adjacent fields (`advisoryConfidence`, `provenanceState`,
+ * `contradictedBy`) are surfaced as **advisory metadata only** — once the
+ * export crosses into any downstream storage (Atomic Memory or otherwise),
+ * those fields become mutable and lose their cryptographic tie to this
+ * export. Consumers should treat them as the compiler's estimate at
+ * export time, not as runtime guarantees.
+ */
+
+import type { PageKind } from "../schema/types.js";
+import type { ProvenanceState, ContradictionRef } from "../utils/types.js";
+import type { FlatCitation } from "../context/provenance.js";
+import type { FreshnessStatus } from "../freshness/types.js";
+import type { DurableConnectorBlock } from "../connectors/types.js";
+
+/**
+ * Flat citation shape exported alongside each page. Identical to the
+ * normalized `FlatCitation` used by `llmwiki context` so adapters that
+ * consume both surfaces share one shape. Paragraph-only citations omit
+ * `start` and `end`; claim-level citations carry the parsed line range.
+ */
+export type ExportCitation = FlatCitation;
+
+/** Snapshot of an imported doc's original OKF frontmatter, captured at import. Present ONLY on imported pages; drives verbatim re-export of foreign frontmatter. */
+export interface XOkfSnapshot {
+  /** Raw OKF `type` when it wasn't a known llmwiki kind (absent for known kinds). */
+  type?: string;
+  /** Bundle-relative source path of the original OKF doc; durable across approval, for diagnosis. */
+  okfPath?: string;
+  /** Full original OKF frontmatter, verbatim. */
+  originalFrontmatter: Record<string, unknown>;
+}
+
+
+/**
+ * Which wiki/ subdirectory a page lives in.
+ *
+ * Intentionally distinct from the schema layer's `PageKind`
+ * (concept/entity/comparison/overview) — this is a filesystem location, not
+ * a semantic typology. Renaming avoids field collision when JSON export and
+ * schema metadata are consumed by the same downstream tooling.
+ */
+export type PageDirectory = "concepts" | "queries";
+
+/** A fully-resolved wiki page ready for export serialisation. */
+export interface ExportPage {
+  /** Human-readable page title (from frontmatter). */
+  title: string;
+  /** Filesystem slug (filename without .md). */
+  slug: string;
+  /** Whether this page came from wiki/concepts or wiki/queries. */
+  pageDirectory: PageDirectory;
+  /**
+   * Project-relative path to the source markdown file, e.g.
+   * `wiki/concepts/retrieval.md`. Surfaced for the bridge so downstream
+   * adapters can deep-link without reconstructing the path themselves.
+   */
+  path: string;
+  /** One-line page summary (from frontmatter). */
+  summary: string;
+  /** Source filenames cited in the page body. */
+  sources: string[];
+  /** Taxonomy tags (from frontmatter). */
+  tags: string[];
+  /**
+   * ISO-8601 creation timestamp, read verbatim from frontmatter. ABSENT when the
+   * page declares none — the export never substitutes its own run time, for the
+   * same reason it omits an unset {@link ExportPage.kind}: an invented value is
+   * indistinguishable from a recorded one once it reaches a consumer.
+   *
+   * Absent rather than `""` because every writer renders this field, and an
+   * empty string is not "no date" — it is an assertion that the date is the
+   * empty string. `"dateCreated": ""` is schema-invalid JSON-LD a consumer must
+   * special-case, and `created:  | updated:` in llms.txt reads as a rendering
+   * fault. A writer that cannot state a date declines to state one.
+   */
+  createdAt?: string;
+  /**
+   * ISO-8601 last-updated timestamp: the page's `updatedAt`, falling back to
+   * {@link ExportPage.createdAt} (a saved query declares only the latter, and
+   * `query --save` rewrites the whole file on every save, so there `createdAt`
+   * *is* the last-written time). ABSENT when the page declares neither, for the
+   * reason above.
+   */
+  updatedAt?: string;
+  /** Slugs of other pages this page links to via [[wikilinks]]. */
+  links: string[];
+  /** Full markdown body (without frontmatter). */
+  body: string;
+  /**
+   * Optional typed page kind from frontmatter. Defaults to "concept" in
+   * downstream consumers when absent — the export omits the field if no
+   * `kind` was set on the wiki page rather than fabricating a default.
+   */
+  kind?: PageKind;
+  /** Original OKF frontmatter snapshot when this page was imported from a foreign bundle; absent for native pages. */
+  xOkf?: XOkfSnapshot;
+  /** Host-authored connector-origin metadata from `x-llmwiki.connector`; absent for native pages. */
+  connectorOrigin?: DurableConnectorBlock;
+  /**
+   * Compiler's confidence estimate at export time. Advisory only —
+   * once imported into any downstream store this field is mutable and
+   * not cryptographically bound to the export.
+   */
+  advisoryConfidence?: number;
+  /** Lifecycle state from the compiler's provenance metadata. Advisory only. */
+  provenanceState?: ProvenanceState;
+  /** Other pages flagged as contradicting this one. Advisory only. */
+  contradictedBy?: ContradictionRef[];
+  /**
+   * Claim citations from the page body, flattened to the shared bridge
+   * shape. One entry per `^[file:start-end]` span. Multi-source markers
+   * (`^[a.md, b.md]`) expand into multiple entries. Paragraph-only
+   * citations carry no line range.
+   */
+  citations: ExportCitation[];
+  /**
+   * Prior external IDs this page was known by (e.g. before a slug
+   * rename). Downstream importers treat any matching alias as an
+   * upsert target so renamed pages do not orphan their prior memory
+   * record.
+   */
+  aliases?: string[];
+  /**
+   * Advisory per-page source-freshness, computed at export time from
+   * `.llmwiki/state.json` + the current `sources/`. A snapshot, not a
+   * guarantee. The export is active-page-only, so this is `fresh`, `stale`,
+   * or `unverified` — never `orphaned` (orphaned pages are dropped from the
+   * export and surfaced by lint/the viewer instead).
+   */
+  freshnessStatus: FreshnessStatus;
+  /** True when the page is disputed by another page (`contradictedBy` non-empty). */
+  contradicted: boolean;
+  /** True when the page is explicitly archived (`archived: true` frontmatter). */
+  archived: boolean;
+  /**
+   * Deterministic SHA-256 (hex) of {@link ExportPage.body}. Lets a
+   * downstream auditor (export provenance) detect content drift and verify that an
+   * imported page still matches what the compiler exported, without
+   * re-reading the markdown. Stable for identical bodies.
+   */
+  contentHash: string;
+  /**
+   * SHA-256 hashes of the source files this page derived from — the same
+   * per-source digests the compiler records in `.llmwiki/state.json` for
+   * change detection. Resolved from the page's `sources` list; ordered and
+   * de-duplicated. Empty when a page has no recorded sources (e.g. seed
+   * pages). Lets an auditor tie a page back to exact source bytes.
+   */
+  sourceHashes: string[];
+  /**
+   * Model id that produced this page's current content, stamped into the
+   * page's frontmatter at compile time (export provenance). Unlike an export-time env
+   * read, this is true per-page lineage: a page compiled by model A keeps
+   * `modelId: A` even if the exporter's env later points at model B. Absent
+   * for pages compiled before provenance stamping shipped.
+   */
+  modelId?: string;
+  /**
+   * Named prompt-contract version the page was compiled under (export provenance),
+   * stamped at compile time. Absent for pre-provenance pages.
+   */
+  promptVersion?: string;
+  /**
+   * Prompt modifiers the page was compiled under, as sorted `key=value` pairs
+   * (export provenance). Absent when the run selected none, and absent for
+   * pages compiled before this was stamped. `promptVersion` names the prompt
+   * implementation and is identical either way; this is what separates them.
+   */
+  promptModifiers?: string[];
+}
+
+/**
+ * Source filter for marp export: which page kinds to include.
+ * "all" includes both concepts and queries (the default).
+ */
+export type MarpSource = "concepts" | "queries" | "all";
+
+/** All recognised marp source values — used for validation. */
+export const MARP_SOURCES: readonly MarpSource[] = ["concepts", "queries", "all"];
+
+/** Supported export target identifiers. */
+export type ExportTarget =
+  | "llms-txt"
+  | "llms-full-txt"
+  | "json"
+  | "json-ld"
+  | "graphml"
+  | "marp"
+  | "okf";
+
+/** All recognised export target names — used for validation. */
+export const EXPORT_TARGETS: readonly ExportTarget[] = [
+  "llms-txt",
+  "llms-full-txt",
+  "json",
+  "json-ld",
+  "graphml",
+  "marp",
+  "okf",
+];
+
+/**
+ * Targets produced by a plain `llmwiki export` (no `--target`).
+ *
+ * Deliberately the six single-file formats only — OKF is excluded because it
+ * writes a whole directory bundle, which would be surprising as a default.
+ * OKF stays reachable explicitly via `--target okf` (it remains in
+ * {@link EXPORT_TARGETS} so that flag still validates).
+ */
+export const DEFAULT_EXPORT_TARGETS: readonly ExportTarget[] = [
+  "llms-txt",
+  "llms-full-txt",
+  "json",
+  "json-ld",
+  "graphml",
+  "marp",
+];

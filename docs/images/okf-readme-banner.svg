@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="330" viewBox="0 0 1400 330" role="img" aria-labelledby="title desc">
+  <title id="title">Breaking News: llmwiki supports Open Knowledge Format</title>
+  <desc id="desc">llmwiki is now an OKF producer and consumer aligned with Google Cloud's emerging standard for portable knowledge sharing.</desc>
+  <defs>
+    <linearGradient id="bubble" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#EFF6FF"/>
+      <stop offset="52%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#ECFDF5"/>
+    </linearGradient>
+    <filter id="shadow" x="-4%" y="-8%" width="108%" height="116%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#0F172A" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+
+  <rect width="1400" height="330" fill="transparent"/>
+  <rect x="34" y="28" width="1332" height="274" rx="38" fill="url(#bubble)" stroke="#2563EB" stroke-width="4" filter="url(#shadow)"/>
+  <rect x="572" y="58" width="256" height="38" rx="19" fill="#DBEAFE" stroke="#93C5FD" stroke-width="1"/>
+  <text x="700" y="84" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18" font-weight="800" fill="#1D4ED8" letter-spacing="1.4">
+    BREAKING NEWS
+  </text>
+
+  <text x="700" y="145" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="38" font-weight="800" fill="#0F172A">
+    llmwiki supports Open Knowledge Format
+  </text>
+  <text x="700" y="190" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="600" fill="#334155">
+    A producer and consumer for Google Cloud's emerging standard for portable knowledge sharing
+  </text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22" font-weight="700">
+    <rect x="286" y="224" width="444" height="46" rx="11" fill="#111827"/>
+    <text x="508" y="254" text-anchor="middle" fill="#E5E7EB">llmwiki export --target okf</text>
+    <rect x="770" y="224" width="344" height="46" rx="11" fill="#111827"/>
+    <text x="942" y="254" text-anchor="middle" fill="#E5E7EB">llmwiki import --okf</text>
+  </g>
+</svg>

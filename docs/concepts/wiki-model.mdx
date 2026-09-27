@@ -1,0 +1,246 @@
+---
+title: "llmwiki Output Model: Wiki, State, and Activity Journal"
+sidebarTitle: "Wiki Model"
+description: "Learn how llmwiki organizes compiled wiki pages, wikilinks, the activity journal, and the .llmwiki directory for embeddings and state."
+---
+
+When llmwiki compiles your sources, it writes everything into a predictable, file-system-native layout. The compiled wiki lives in `wiki/`, the compiler's internal state lives in `.llmwiki/`, and every operation - ingest, compile, query - appends a timestamped entry to `log.md`. Wiki pages and the journal remain plain text you can open in Obsidian. The derived embedding index can use binary storage; other state files use JSON.
+
+## Output Directory Structure
+
+```
+log.md                  append-only activity journal
+wiki/
+  concepts/             one .md file per compiled concept page
+  queries/              saved answers from llmwiki query --save
+  index.md              auto-generated table of contents
+.llmwiki/
+  state.json            per-source content hashes and concept ownership
+  embeddings.json       small-store page and chunk vectors
+  embeddings.bin        binary index when selected; takes precedence over JSON
+  schema.json           optional page-kind and cross-link policy
+  config.json           review policy (hold modes and thresholds)
+  candidates/           pages held for review
+  candidates/archive/   rejected candidates kept for audit
+  eval/
+    history.jsonl       one JSON line per eval run
+    citation-cache.jsonl  cached citation judgements
+    thresholds.yaml     optional CI threshold configuration
+```
+
+## The `wiki/` Directory
+
+<CardGroup cols={3}>
+  <Card title="wiki/concepts/" icon="file-lines">
+    One Markdown file per compiled concept. Each file has YAML frontmatter with title, summary, kind, sources, timestamps, and optional epistemic metadata. The file body contains prose paragraphs with `^[source.md]` citation markers and `[[wikilinks]]` to related concepts.
+  </Card>
+  <Card title="wiki/queries/" icon="magnifying-glass">
+    Saved answers from `llmwiki query --save`. Query pages are full wiki pages and participate in retrieval - future queries use them as context, compounding the wiki's usefulness over time.
+  </Card>
+  <Card title="wiki/index.md" icon="list">
+    An auto-generated table of contents rebuilt after every compile. Lists every concept page with its summary, grouped for navigation. Both the CLI and the local viewer use this as the primary entry point.
+  </Card>
+</CardGroup>
+
+## The `.llmwiki/` Directory
+
+<CardGroup cols={2}>
+  <Card title="state.json" icon="database">
+    Tracks per-source SHA-256 content hashes and the concept slugs each source owns. On every compile, llmwiki compares live file hashes against this state to determine what needs reprocessing. This is what makes incremental compilation possible.
+  </Card>
+  <Card title="Embedding index" icon="vector-square">
+    The v3 embedding store carries page and chunk vectors under qualified page ids for query and context retrieval. Small stores use `embeddings.json`; large or explicitly opted-in stores use `embeddings.bin`. Binary remains authoritative on later runs; an old JSON file is only a historical backup. See [storage and recovery](/configuration/environment-variables#embedding-storage).
+  </Card>
+  <Card title="candidates/" icon="clock">
+    JSON records for pages held for review - either via `llmwiki compile --review`, triggered automatically by a review policy in `config.json`, or staged by `llmwiki import --okf`. Each candidate records exactly why it was held (low confidence, contradicted, schema-violating, provenance-violating, or imported from OKF). Rejected candidates move to `candidates/archive/` for audit.
+  </Card>
+  <Card title="schema.json" icon="sitemap">
+    An optional file you create with `llmwiki schema init`. Defines which page kinds are permitted, per-kind minimum wikilink counts, and seed pages the compiler should materialize (such as domain-level overview pages). Projects without a schema file fall back to the `concept` kind for all pages.
+  </Card>
+  <Card title="config.json" icon="gear">
+    Holds the review policy: which hold modes are active (`low-confidence`, `contradicted`, `schema-violating`, `provenance-violating`) and the `lowConfidenceThreshold`. A missing or empty `config.json` means all pages are written directly to `wiki/` with no review step.
+  </Card>
+</CardGroup>
+
+## Wikilinks and Alias Resolution
+
+llmwiki uses standard `[[double-bracket]]` wikilink syntax throughout the wiki. During the interlink resolution phase, the compiler scans every concept page for title mentions and wraps them in `[[slug|Title]]` links. The piped alias form keeps Obsidian link resolution stable when a page's filename differs from its display title.
+
+You can also declare aliases in a page's frontmatter to make a page reachable under multiple names:
+
+```yaml
+---
+title: Multi-Head Attention
+aliases:
+  - multi-head self-attention
+  - MHA
+---
+```
+
+Any `[[multi-head self-attention]]` or `[[MHA]]` link in the wiki resolves to this page, even if the slug is `multi-head-attention`. Alias resolution is honored by the local viewer, the MCP `read_page` tool, and `llmwiki query`.
+
+<Note>
+  The wiki is fully Obsidian-compatible. Open the `wiki/` directory as an Obsidian vault to browse compiled pages, follow wikilinks, and view the knowledge graph - no additional configuration required.
+</Note>
+
+## Source Attribution
+
+Every compiled page declares its source files in frontmatter:
+
+```yaml
+---
+title: Knowledge Compilation
+summary: Techniques for converting knowledge representations into forms that support efficient reasoning.
+kind: concept
+sources:
+  - knowledge-compilation.md
+createdAt: "2026-04-05T12:00:00Z"
+updatedAt: "2026-04-05T12:00:00Z"
+---
+```
+
+The `sources` field lists the filenames from `sources/` that contributed to this page. These filenames - combined with the content hashes recorded in `.llmwiki/state.json` - are what llmwiki compares on subsequent runs to determine whether a page is fresh, stale, or orphaned.
+
+When multiple sources merge into one page, all contributing source filenames appear in the `sources` array.
+
+## Topic pages from shared knowledge publications
+
+The optional v2 knowledge-flow adapter captures each completed turn, consolidates
+increments of a continuing session, and maintains project topic pages across
+sessions. A turn or publication does not imply a new page.
+
+### Session continuity
+
+New host jobs use this policy in the private knowledge-flow configuration:
+
+```json
+{
+  "sessionConsolidation": {
+    "enabled": true,
+    "quietSeconds": 300,
+    "maxWaitSeconds": 1800
+  }
+}
+```
+
+The five-minute quiet period restarts when new eligible material arrives. A busy
+session becomes eligible after thirty minutes; an explicit request to consolidate
+can make it eligible immediately. Queue byte, batch-size, retry and daily-budget
+limits still apply. A completed turn does not permanently close a session.
+Previously frozen jobs retain their original processing contract.
+
+Private `session-state/` files are keyed by both project and native session. They
+retain the processed cursor, topic associations, a local summary and up to 40,000
+characters of recent original evidence. The complete frozen batch audit remains
+local. Summaries provide context, never evidence. A short approval needs both the
+original proposal and the user's approval quotes. Different projects in one
+conversation have separate state.
+
+Model planning, drafting and independent-review responses are saved under the
+private state's `consolidation/` directory. Retries reuse the same frozen inputs
+and saved responses. New messages wait for another batch. The session cursor
+advances only after successful queue finalization; corrupt state fails closed.
+
+### Plan, edit and independently review
+
+The planner first searches the project's topic catalog and prior session topic
+associations. It updates an existing page for the same decision object. A new
+page requires a separate object and a reason that the existing pages do not fit.
+Different projects, platforms and unrelated decisions remain separate.
+
+The editor rewrites the complete topic narrative, keeping useful context,
+alternatives, rationale, applicability, open questions and citations. An explicit
+user revision can change the current conclusion while retaining the previous
+rule in dated history. An independent reviewer checks the entire before/after
+diff and every claim. Ambiguous changes are held for review. Reference prompts
+and assistant analysis cannot become user decisions or proof of implementation.
+Both editing and review include the original sources cited by the prior page.
+Missing sources or incomplete review coverage hold the batch for inspection;
+one bounded correction can address review findings without changing its evidence.
+
+Accepted publications retain narrow exact quotes and reviewed `topicRevisions`.
+Each revision records a stable `topicId`, the page's previous SHA-256 hash, its
+complete new body and the contributing claim indexes. A publication may update
+several pages; several claims may contribute to a single page. Topic identities
+are separate from display titles. New filenames and project navigation use
+readable labels; project ownership comes from metadata rather than a filename
+prefix.
+
+### Deterministic replay and migration
+
+Replica sync replays accepted revisions without running a model. The previous
+page hash must match. Unobserved concurrent edits to one page are held, and a
+multi-page publication is applied together. A page over the 12,000-character
+review budget stops the staged generation; the active generation remains intact.
+The local `.llmwiki/materialization-input.json` pins a stage's inputs. Changed
+inputs require a fresh copy of the frozen baseline.
+Navigation omits volatile generation timestamps. Migration also updates source
+ownership and frozen-page paths to the reviewed canonical pages.
+
+Old publications remain immutable and replayable. A reviewed historical grouping
+can use the version 1 `v2/topic-routes.json` manifest with `baselineId`,
+`reviewedAt` and `groups`. Each group contains `projectId`, `topic`,
+`decisionObject` and exact `claimRefs` in `<publication-id>:<claim-index>` form.
+
+A whole-vault migration uses version 2 of that envelope and adds `migration`.
+The migration pins `basisRecordIds` and a list of reviewed destination pages.
+Each destination includes its project, stable topic identity, complete body and
+`previousPages`, whose entries contain the previous page ID and SHA-256 hash.
+All original citations and publication references are retained. This private,
+business-specific manifest stays outside the repository. Its trust boundary is
+write access to the shared exchange; do not install an unreviewed manifest.
+
+Upgrade all participants before activating a version 2 migration. Older runtimes
+reject its version and retain their last generation rather than reconstructing
+fragment pages. Keep the migration after activation. Removing it restores the
+old projection. Original baseline sources and publication packets are unchanged;
+readable evidence bundles are derived from those packets.
+
+Only the designated shared materializer writes the shared Obsidian projection.
+It checks ownership hashes before changing any file. Human edits block the batch.
+Explicitly merged baseline pages have durable retirement records, with recoverable
+`.llmwiki-preserved-*.bak` backups. Rolling back the migration restores them;
+a human-created replacement still blocks automatic overwrite. Repair external,
+hand-maintained links against the reviewed old-to-new mapping. Runtime installation
+alone does not migrate an existing vault.
+
+## Imported OKF Provenance
+
+Pages imported from Open Knowledge Format bundles are marked as imported knowledge. The mapped page frontmatter carries `provenanceState: imported`, an `okf:<bundle>` source token, and an `x-okf` provenance snapshot that records the original bundle path and original OKF frontmatter.
+
+This imported provenance is used for honest re-export: `llmwiki export --target okf` preserves foreign producer keys and raw foreign `type` values, restores safe original bundle paths, and derives standard OKF fields from the current llmwiki page so local edits are reflected.
+
+<Note>
+  OKF import is review-gated by default. External bundle content is staged as review candidates and does not become live wiki content until you approve it. Use `llmwiki import --okf <dir> --trusted` only for bundles you already trust.
+</Note>
+
+## The Activity Journal (`log.md`)
+
+Every ingest, compile, and query operation appends a timestamped entry to `log.md` at the project root. Entries use a fixed heading format - `## [YYYY-MM-DDThh:mm:ssZ] operation | description` - followed by a short bullet body carrying page wikilinks and counts:
+
+```markdown
+## [2026-06-05T09:14:02Z] ingest | Attention Is All You Need
+- Source: https://arxiv.org/abs/1706.03762
+- Saved: sources/attention-is-all-you-need.md
+- Chars: 38,214
+
+## [2026-06-05T09:15:30Z] compile | 1 source(s) → 6 page(s)
+- Sources: attention-is-all-you-need.md
+- Created: [[self-attention]], [[multi-head-attention]], [[transformer]]
+- Updated: [[positional-encoding]]
+
+## [2026-06-05T09:16:11Z] query | What is multi-head attention?
+- Pages: [[multi-head-attention]], [[self-attention]]
+```
+
+Because only headings start with `## [`, you can reliably extract recent operations with standard shell tools:
+
+```bash
+grep "^## \[" log.md | tail -5
+```
+
+`log.md` tracks temporal progression - when things were compiled and in what order. `wiki/index.md` organizes content for discovery. Both are human-readable and machine-parseable.
+
+<Tip>
+  `log.md` is a useful audit trail when running llmwiki through the MCP server or SDK. Agents can read it to understand what has already been compiled, what was recently updated, and which pages were created from a given source.
+</Tip>

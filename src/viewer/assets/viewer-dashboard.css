@@ -1,0 +1,629 @@
+/**
+ * llmwiki viewer — Overview dashboard.
+ *
+ * Styles the DOM `viewer-dashboard.js` emits: the four-card stat grid, the
+ * hero banner, the recently-compiled / knowledge-graph split, the compile
+ * receipt, and the next-actions rail. Every colour is a token from
+ * viewer-tokens.css — no raw colour literals — so both themes stay correct
+ * automatically.
+ *
+ * Three decisions worth flagging for a reader unfamiliar with the redesign:
+ *   - The meter under "Citations resolved" is two segments (violet fill,
+ *     `--warn` remainder), never a neutral track. A grey remainder would
+ *     read as "no data"; amber reads as "this much is unresolved", which is
+ *     the fact being reported.
+ *   - `.graph-panel-surface` holds a real compact graph (viewer-dashboard.js
+ *     renders it, not a decorative frame) and is a positioned container, not
+ *     just a styled box — see the rule's own comment for why that matters.
+ *   - A panel (`.panel`, `.pattern-strip`) is a bordered container with NO
+ *     padding of its own, banded into a head/body/footer that each supply
+ *     their own padding and border — never a padded box with a uniform
+ *     gap. Getting this backwards was the single largest fidelity gap the
+ *     2026-08-05 pass found (see the fidelity audit's root-cause note).
+ *
+ * `.main-pane` (viewer-content.css) caps prose width at `min(100%, 72ch)`,
+ * which is far too narrow for a 4-column stat grid. `.dashboard` overrides
+ * `width` back to 100% — same selector specificity, later in the cascade
+ * (this sheet loads after viewer-content.css) — without editing the shared
+ * rule the page/index routes still rely on. `.graph-pane` (viewer-graph.css)
+ * and `.list-pane` (viewer-content.css, later in that same file) override
+ * the same rule the same way, for the same reason.
+ *
+ * `.dashboard` (on `main` itself) is the mockup's primary column
+ * (tree line 102) — a flex column, not a grid. The rail is no longer a
+ * child of `main` at all: it lives in the shared `[data-support-rail]`,
+ * a sibling of `main` inside `.content-grid` (viewer-chrome.css). See the
+ * fidelity audit's A2 note.
+ */
+
+.dashboard {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+/* ---- Stat grid ---- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-12);
+}
+
+.stat-card {
+  /* 15px is off the 6/9/12/16/24 spacing scale — mockup tree lines
+   * 104/114/124/134. No flex/gap here: the head's margin-bottom and the
+   * sub-line's margin-top supply the internal rhythm instead (below) — a
+   * flex column would double up on that spacing. */
+  padding: 15px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tile);
+}
+
+/* Counter tile rule: only a number that can be bad (or good) is coloured;
+ * plain informational cards (concepts, sources) stay neutral. is-warn and
+ * is-calm are mutually exclusive — a warnWhenNonZero card is always
+ * exactly one or the other (see buildStatCard, viewer-dashboard.js). */
+.stat-card.is-warn { background: var(--warn-bg); border-color: var(--warn-border); }
+.stat-card.is-warn .stat-value { color: var(--warn); }
+.stat-card.is-warn .stat-sub { color: var(--warn-muted); }
+.stat-card.is-warn .stat-badge { color: var(--warn); background: var(--warn-a13); }
+
+/* Awaiting-review-only in the mockup (tree line 140): the value tints teal
+ * when the queue is empty, unlike the neutral default concepts/sources
+ * use — a calm-state accent, distinct from is-warn's urgency tint. Only
+ * "reviews" opts in (calmWhenZero, viewer-dashboard.js); "needs attention"
+ * calm (0 findings) isn't shown in the mockup, so it stays neutral rather
+ * than being assumed to match. */
+.stat-card.is-calm .stat-value { color: var(--ok); }
+.stat-card.is-calm .stat-badge { color: var(--ok); background: var(--ok-a10); }
+
+.stat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* 14px is off the spacing scale — mockup tree lines 105/115/125/135. */
+  margin-bottom: 14px;
+}
+
+/* 400 11.5px/1 sans has no matching token — --type-label is a distinct
+ * mono/uppercase eyebrow style used elsewhere. Mockup tree lines
+ * 106/116/126/136; content is already sentence case ("Concepts"), so no
+ * text-transform here. */
+.stat-label { font: 400 11.5px/1 var(--font-sans); color: var(--fg-muted); }
+
+.stat-badge {
+  font: var(--type-badge);
+  color: var(--fg-faint);
+  background: var(--bg-chip);
+  /* 4px is off the spacing scale; no border in the mockup (tree lines
+   * 108/118/128/138). */
+  padding: 4px 6px;
+  border-radius: var(--radius-badge);
+}
+/* Concepts is the only card whose badge carries the accent identity
+ * colour rather than the neutral default above (mockup tree line 108). */
+.stat-card[data-stat="concepts"] .stat-badge {
+  color: var(--accent-text);
+  background: var(--accent-a12);
+}
+
+.stat-value { font: var(--type-metric); letter-spacing: -0.035em; color: var(--fg); }
+
+/* 400 11px/1 mono matches --type-metadata exactly. This is the neutral
+ * default (concepts/sources/reviews-when-calm); is-warn above overrides
+ * both colour and weight-of-meaning for a signal card with something to
+ * report (mockup tree lines 112/122/132/142). */
+.stat-sub { font: var(--type-metadata); color: var(--fg-faint); margin-top: var(--space-9); }
+
+/* ---- Hero banner ---- */
+
+.hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  /* 20px / 16px 20px are off the spacing scale — mockup tree line 144. */
+  gap: 20px;
+  padding: 16px 20px;
+  border: 1px solid var(--accent-a26);
+  border-radius: var(--radius-panel);
+  background: linear-gradient(100deg, var(--accent-a16), var(--accent-a03) 62%, transparent);
+}
+
+.hero-copy { min-width: 0; }
+
+.hero-title {
+  /* No matching token for 600 15px/1.25 — mockup tree line 146; --fg (not
+   * --fg-strong) is the mockup's colour here. */
+  font: 600 15px/1.25 var(--font-sans);
+  color: var(--fg);
+  margin-bottom: 5px;
+}
+
+/* No margin-top: the title's margin-bottom above already supplies the gap
+ * between them (mockup tree line 148 carries no margin of its own) —
+ * stacking both would compound the spacing. */
+.hero-body { font: var(--type-body); color: var(--fg-muted); }
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-9);
+  flex: none;
+}
+
+/* Page-action buttons are 36px; header controls are 34px (viewer-chrome.css). */
+.button {
+  display: inline-flex; align-items: center;
+  /* 8px is off the spacing scale — mockup tree line 151. */
+  gap: 8px;
+  height: 36px; padding: 0 16px;
+  border-radius: var(--radius-control);
+  font: 600 12.5px/1 var(--font-sans);
+}
+.button-primary { background: var(--accent); color: var(--on-accent); }
+.button-primary:hover { background: var(--accent-text); text-decoration: none; }
+.button-secondary {
+  background: var(--bg-hover);
+  border: 1px solid var(--border-button);
+  color: var(--fg-body);
+  font-weight: 500;
+  padding: 0 14px;
+}
+
+/* ---- Recently compiled / knowledge graph split ---- */
+
+.dashboard-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr);
+  /* 14px is off the spacing scale — mockup tree line 155. */
+  gap: 14px;
+  align-items: stretch;
+}
+
+/*
+ * Bordered container, NO padding of its own — content is banded into a
+ * head/body/footer, each supplying its own padding and border (mockup
+ * tree lines 156-161). This is the structural fix the fidelity audit's
+ * root-cause note calls out: a `.panel` used to be a padded flex column
+ * with a uniform gap, which cannot produce independently-bordered bands.
+ */
+.panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+/* The graph panel's compact D3 simulation can push nodes past its bounds
+ * while settling; the recent-compiled panel never overflows, so only the
+ * graph panel opts into clipping (mockup tree line 224 vs 156). */
+.graph-panel { overflow: hidden; }
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* 14px 17px is off the spacing scale — mockup tree lines 157/225 (the
+   * recent-compiled and graph panel heads). The rail's receipt/next-actions
+   * panels share this shell via buildPanel() too, but the mockup gives
+   * their heads a different 13px 16px padding (tree line 290) — left for
+   * the rail's own fidelity pass to true up. */
+  padding: 14px 17px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.panel-title { font: var(--type-panel-title); color: var(--fg-strong); }
+/* The panel head's own trailing link (e.g. "View all") is a direct child
+ * of `.panel-head`, so it needs no class of its own. Colour comes from the
+ * global `a` rule (viewer-tokens.css), which already resolves to
+ * --accent-text — the mockup's colour here too. */
+.panel-head > a { font: var(--type-provenance); }
+
+/* Knowledge-graph-only: title + node/edge caption grouped on the left
+ * (baseline-aligned, mockup tree line 226), Fit/expand chips on the right. */
+.panel-head-group { display: flex; align-items: baseline; gap: 10px; }
+.panel-controls { display: flex; gap: 6px; }
+.panel-chip {
+  /* 5px 9px is off the spacing scale — mockup tree lines 232/234. */
+  padding: 5px 9px;
+  border-radius: var(--radius-chip);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-chip);
+  font: 500 10.5px/1 var(--font-mono);
+  color: var(--fg-muted);
+  /* Fit/⤢ are a real <button>/<a> (see buildGraphPanelControls), not the
+   * inert <span> this replaced — reset the UA chrome both bring (button
+   * appearance/margin, link underline) so they still match the mockup's
+   * flat chip geometry pixel-for-pixel. */
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  appearance: none;
+  text-decoration: none;
+  cursor: pointer;
+}
+.panel-chip:hover:not(:disabled) {
+  color: var(--fg-body);
+  border-color: var(--border-strong);
+  text-decoration: none;
+}
+.panel-chip:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+/* Fit only — the expand link is never disabled. Reads as unavailable
+ * rather than merely restyled hover, matching --fg-disabled's existing
+ * "near-invisible, deliberately below contrast floor" role for inactive
+ * controls (viewer-chrome.css .nav-count-zero; WCAG 1.4.3 exempts
+ * disabled components from the contrast minimum). */
+.panel-chip:disabled { color: var(--fg-disabled); cursor: not-allowed; }
+
+.panel-body {
+  /* 5px 8px 8px is off the spacing scale — mockup tree line 162. Rows
+   * stack directly with no gap: each row supplies its own padding. */
+  padding: 5px 8px 8px;
+  flex: 1;
+}
+
+/* 400 10.5px/1 mono has no matching token (--type-metadata is 11px) —
+ * mockup tree line 229; --fg-faint (not --fg-dim) is the mockup's colour
+ * here. Found in task 4's final verification sweep of tasks 1-3's work. */
+.panel-caption { font: 400 10.5px/1 var(--font-mono); color: var(--fg-faint); }
+
+.panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* 11px 17px is off the spacing scale; 10.5px has no matching type token
+   * — mockup tree lines 219/253. */
+  padding: 11px 17px;
+  border-top: 1px solid var(--border-soft);
+  font: 400 10.5px/1 var(--font-mono);
+  color: var(--fg-faint);
+}
+.panel-footer a { color: var(--accent-text); }
+/* Graph-panel footer only: the dangling-target count, tinted --danger when
+ * non-zero (mockup tree line 258) — a zero count is good news, not a
+ * warning, the same rule as the stat cards' counter tiles above. */
+.footer-danger { color: var(--danger); }
+
+.recent-row {
+  display: flex;
+  align-items: center;
+  /* 11px / 10px 9px are off the spacing scale — mockup tree line 163. */
+  gap: 11px;
+  padding: 10px 9px;
+  border-radius: var(--radius-row);
+}
+.recent-row:hover { background: var(--bg-hover); }
+
+.recent-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-row);
+  color: var(--fg-body);
+}
+
+/* citationCount — the approved substitution for the mockup's "8/8"
+ * cited/total-claims ratio (design spec §5.3; this build has no claims
+ * inventory to back a ratio — see file header). 500 10px/1 mono has no
+ * matching type token — mockup tree line 167. */
+.recent-citations {
+  flex: none;
+  font: 500 10px/1 var(--font-mono);
+  color: var(--accent-text);
+}
+/* Tinted to match the row's freshness dot (mockup tree line 183 — the
+ * Andrej Karpathy row's "9/10" is --warn beside a --warn dot) — driven by
+ * the same isWarnFreshness predicate as .list-dot.is-warn above, so the
+ * figure and the dot can never disagree about one page's freshness. */
+.recent-citations.is-warn { color: var(--warn); }
+
+.recent-age {
+  flex: none;
+  /* 10.5px has no matching token — mockup tree line 169. The fixed 50px
+   * width right-aligns this column regardless of the citation count's
+   * digit width. */
+  font: 400 10.5px/1 var(--font-mono);
+  color: var(--fg-faint);
+  width: 50px;
+  text-align: right;
+}
+
+/* Freshness dot shared with the #/concepts and #/queries list rows
+ * (viewer-lists.js): status colour alone never carries the meaning — every
+ * dot also carries a title/aria-label — so only geometry + colour live here. */
+.list-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.list-dot.is-ok { background: var(--ok); }
+.list-dot.is-warn { background: var(--warn); }
+/* Recently-compiled rows use a smaller 5x5 dot than the shared #/concepts
+ * and #/queries list rows' 7x7 (mockup tree line 164) — scoped by
+ * ancestor rather than resizing .list-dot everywhere it's used. */
+.recent-row .list-dot { width: 5px; height: 5px; }
+
+/* Compact legend row (concept / entity / stale / dangling) for the
+ * knowledge-graph panel — spec §5.3. A plain flow row, not the absolutely-
+ * positioned `.graph-legend` overlay viewer-graph.css defines for the full
+ * `#/graph` explorer (there is no room to float an overlay over a 296px
+ * panel). Reuses that file's `.graph-legend-item`/`.graph-legend-dot--*`
+ * rules unchanged for the item layout and swatch colours, so this row can
+ * never invent a second palette. */
+.panel-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* 14px / 9px 17px are off the spacing scale; 500 10px/1 mono has no
+   * matching token — mockup tree line 236. */
+  gap: 14px;
+  padding: 9px 17px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-sunken);
+  font: 500 10px/1 var(--font-mono);
+  color: var(--fg-muted);
+}
+/* Trailing "size = degree" note (mockup tree line 249). The mockup's own
+ * literal colour here (#5c5877) is the pre-contrast-fix value of
+ * --fg-ghost — see that token's comment in viewer-tokens.css — so this
+ * uses the token, not the literal, to avoid reintroducing a known failure. */
+.panel-legend-note { margin-left: auto; color: var(--fg-ghost); }
+/* Compact legend's dots are smaller than the full explorer's overlay
+ * (7x7 vs 8x8, mockup tree line 238) — scoped here rather than resizing
+ * the shared .graph-legend-dot class both surfaces reuse. */
+.panel-legend .graph-legend-dot { width: 7px; height: 7px; }
+
+/* Compact graph surface: viewer-dashboard.js renders the real force-directed
+ * graph into [data-graph-panel] here (see file header). `position: relative`
+ * is not decorative — it establishes the containing block that the graph's
+ * absolutely-positioned hover tooltip (`.graph-tooltip`, viewer-graph.css)
+ * resolves against; without it, the tooltip escapes this panel and positions
+ * against whatever ancestor happens to be positioned instead. `overflow:
+ * hidden` clips nodes the compact simulation pushes past the panel's bounds
+ * while settling, matching `.graph-pane` on the full #/graph route. No
+ * border/radius of its own (mockup tree line 251) — `.graph-panel`'s
+ * overflow:hidden and border-radius above already bound it. */
+.graph-panel-surface {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  min-height: 296px;
+  background: radial-gradient(120% 90% at 50% 45%, var(--graph-bg-inner) 0%, var(--graph-bg-outer) 70%);
+}
+
+/*
+ * ---- Rail: compile receipt, next actions, snapshot note (tree line 288+) ----
+ *
+ * The receipt/next-actions panels reuse the shared `.panel`/`.panel-head`/
+ * `.panel-body` shell (buildPanel(), above) but the tree gives the rail its
+ * own head padding (13px 16px vs the dashboard's 14px 17px) and asks the
+ * receipt's body for a grid, not the dashboard's tight row padding — both
+ * scoped to `[data-support-rail]` rather than edited into the shared base,
+ * which the dashboard panels above still rely on unchanged.
+ */
+[data-support-rail] .panel-head {
+  /* 13px 16px is off the spacing scale — mockup tree lines 290/330. */
+  padding: 13px 16px;
+}
+/* 600 12.5px/1 has no matching token (--type-panel-title is 13.5px) — mockup
+ * tree lines 290/330, one size step down from the dashboard panels' heads. */
+[data-support-rail] .panel-title { font: 600 12.5px/1 var(--font-sans); }
+/* Both rail panels clip (mockup tree lines 289/329); the dashboard's
+ * recent-compiled panel deliberately does not (see that rule above), so this
+ * stays scoped to the rail rather than joining the shared `.panel` base. */
+[data-support-rail] .panel { overflow: hidden; }
+
+/* `.receipt-body` is a hook class alongside `.panel-body` (buildReceipt,
+ * viewer-dashboard.js) so this can override the shared body padding without
+ * touching `.panel-body` itself — mockup tree line 292. */
+.receipt-body {
+  /* 14px 16px is off the spacing scale. */
+  padding: 14px 16px;
+  display: grid;
+  gap: var(--space-12);
+}
+
+.receipt-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  /* 10px is off the spacing scale (nearest token, --space-9, is 9px) —
+   * mockup tree line 293. */
+  gap: 10px;
+}
+
+/* 400 11.5px/1 sans has no matching token — mockup tree line 294, the same
+ * literal already used for `.stat-label`/`.meter-label`. */
+.receipt-label { font: 400 11.5px/1 var(--font-sans); color: var(--fg-dim); }
+/* 500 11px/1 mono matches --type-provenance exactly — mockup tree line 301
+ * (every row's value except Root's own variant below). */
+.receipt-value { font: var(--type-provenance); color: var(--fg-body); }
+/* Root's path is the only receipt value long enough to wrap — right-aligned
+ * against its label instead of truncated (mockup tree line 296). No token
+ * matches the 1.4 line-height. */
+.receipt-value-path {
+  font: 500 11px/1.4 var(--font-mono);
+  text-align: right;
+  word-break: break-all;
+}
+
+/* Meter block ("Citations resolved", replacing the mockup's claim-inventory-
+ * backed "Traceability" bar — see buildMeter's own comment). Divided from the
+ * row list above by a border, not a gap (mockup tree line 318); 12px matches
+ * --space-12 exactly. */
+.meter {
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--border-soft);
+}
+.meter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* 8px is off the spacing scale — mockup tree line 319. */
+  margin-bottom: 8px;
+}
+/* 400 11.5px/1 sans has no matching token — mockup tree line 320. */
+.meter-label { font: 400 11.5px/1 var(--font-sans); color: var(--fg-dim); }
+/* 600 13px/1 sans has no matching token — mockup tree line 322; --fg (not
+ * --fg-strong) is the mockup's colour here. */
+.meter-value { font: 600 13px/1 var(--font-sans); color: var(--fg); }
+
+/* `--border-soft` track background never actually shows — `.bar-fill` and
+ * `.bar-remainder` always sum to 100% width between them — but the mockup
+ * states it (tree line 324) so it is here too, as a defensive base rather
+ * than relying on that always holding exactly. `.bar-fill`'s width is a
+ * CSSOM property write from viewer-dashboard.js, not a markup `style=`
+ * attribute, so it does not need `style-src 'unsafe-inline'`. */
+.bar-track {
+  display: flex;
+  height: 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--border-soft);
+}
+.bar-fill { background: var(--accent); }
+.bar-remainder { flex: 1; background: var(--warn); }
+
+/* 400 10.5px/1 mono has no matching token — mockup tree line 327; --fg-faint
+ * (not --fg-dim, which the row labels above use) is the mockup's colour here. */
+.meter-caption { font: 400 10.5px/1 var(--font-mono); color: var(--fg-faint); margin-top: 8px; }
+
+/* `.next-actions-body` is next-actions' own hook class alongside
+ * `.panel-body` (buildNextActions, viewer-dashboard.js), mirroring
+ * `.receipt-body` above — mockup tree line 332. */
+.next-actions-body { padding: 8px; }
+
+.action-row {
+  display: flex;
+  align-items: center;
+  /* 11px / 11px 10px are off the spacing scale — mockup tree line 333. */
+  gap: 11px;
+  padding: 11px 10px;
+  border-radius: var(--radius-row);
+  margin-bottom: 2px;
+}
+.action-row:last-child { margin-bottom: 0; }
+/* The first row is the emphasised "do this next" pill — background, border,
+ * and a wider trailing gap set it apart from the plain rows below (mockup
+ * tree line 333); its glyph and title also pick up the stronger colours
+ * below rather than the other rows' neutral ones. */
+.action-row:first-child {
+  background: var(--bg-hover);
+  border: 1px solid var(--border-strong);
+  margin-bottom: var(--space-6);
+}
+
+.action-glyph { font: 500 12px/1 var(--font-mono); flex: none; color: var(--accent-text); }
+.action-row:first-child .action-glyph { color: var(--warn); }
+
+.action-body { flex: 1; min-width: 0; }
+.action-title {
+  display: block;
+  font: 500 12px/1.2 var(--font-sans);
+  color: var(--fg-body);
+  margin-bottom: 3px;
+}
+.action-row:first-child .action-title { color: var(--fg-strong); }
+.action-hint { font: 400 10.5px/1.3 var(--font-mono); color: var(--fg-dim); }
+
+.snapshot-note {
+  /* 13px 15px is off the spacing scale — mockup tree line 365. */
+  padding: 13px 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  background: var(--bg-sunken);
+  /* 400 11px/1.65 mono has no matching token — mockup tree line 366. */
+  font: 400 11px/1.65 var(--font-mono);
+  color: var(--fg-dim);
+}
+/* The inline "llmwiki view" command (mockup tree line 368). */
+.snapshot-command { color: var(--accent-text); }
+
+/* ---- Pattern strip: the four-column static explainer ---- */
+
+/*
+ * Bordered container, no padding/gap of its own — head band + a 4-column
+ * body grid whose dividers are borders, not a grid gap (mockup tree lines
+ * 261/267). Same "not a padded box" structure as `.panel` above.
+ */
+.pattern-strip {
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+
+.pattern-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* 13px is off the spacing scale — mockup tree line 262 (one px tighter
+   * than the recent/graph panel heads' 14px 17px above). */
+  padding: 13px 17px;
+  border-bottom: 1px solid var(--border-soft);
+}
+/* 600 13px/1 has no matching token (--type-panel-title is 13.5px) —
+ * mockup tree line 263. */
+.pattern-title { font: 600 13px/1 var(--font-sans); color: var(--fg-strong); }
+
+.pattern-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pattern-column {
+  /* 16px 17px is off the spacing scale — mockup tree lines 268/273/278/283.
+   * The divider between columns is a border, not a grid gap. */
+  padding: 16px 17px;
+  border-right: 1px solid var(--border-soft);
+}
+.pattern-column:last-child { border-right: none; }
+
+/* 500 10px/1 mono has no matching token (closest, --type-badge, is 9.5px)
+ * — mockup tree line 269; --accent-text (not --fg-ghost) is the mockup's
+ * colour here. */
+.pattern-eyebrow {
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  color: var(--accent-text);
+  margin-bottom: 10px;
+}
+
+/* No margin-top: the eyebrow's margin-bottom above already supplies the
+ * gap (mockup tree line 271 carries no margin of its own). --fg-muted (not
+ * --fg-dim) is the mockup's colour; 1.6 (not --type-body's 1.5) is its
+ * line-height — mockup tree line 271. */
+.pattern-body { font: 400 12.5px/1.6 var(--font-sans); color: var(--fg-muted); }
+
+/* ---- Empty state (Nebula Design System reference) ---- */
+
+.empty-state {
+  padding: var(--space-16);
+  border: 1px dashed var(--border-button);
+  border-radius: var(--radius-tile);
+  background: var(--bg-sunken);
+}
+.empty-state-title { font: 500 12.5px/1.3 var(--font-sans); color: var(--fg-strong); }
+.empty-state-body { font: 400 11.5px/1.55 var(--font-sans); color: var(--fg-dim); }
+.empty-state-command {
+  display: inline-flex; align-items: center; gap: var(--space-9);
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-strong);
+  font: 500 11.5px/1 var(--font-mono);
+  color: var(--fg-body);
+}
+
+@media (max-width: 900px) {
+  .dashboard-split { grid-template-columns: minmax(0, 1fr); }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pattern-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

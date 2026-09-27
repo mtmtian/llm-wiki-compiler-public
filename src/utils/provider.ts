@@ -1,0 +1,255 @@
+/**
+ * LLM provider abstraction layer.
+ *
+ * Defines the LLMProvider interface and a factory function that reads
+ * LLMWIKI_PROVIDER and LLMWIKI_MODEL env vars to instantiate the
+ * appropriate backend.
+ */
+
+import {
+  DEFAULT_PROVIDER,
+  PROVIDER_MODELS,
+  OLLAMA_DEFAULT_HOST,
+  SUPPORTED_PROVIDER_INPUTS,
+  normalizeProviderName,
+} from "./constants.js";
+import { AnthropicProvider } from "../providers/anthropic.js";
+import { OpenAIProvider } from "../providers/openai.js";
+import { OllamaProvider } from "../providers/ollama.js";
+import { MiniMaxProvider } from "../providers/minimax.js";
+import { OrcaRouterProvider } from "../providers/orcarouter.js";
+import { CopilotProvider } from "../providers/copilot.js";
+import { ClaudeAgentProvider } from "../providers/claude-agent.js";
+import { CodexAgentProvider } from "../providers/codex-agent.js";
+import {
+  AtlasCloudProvider,
+  resolveAtlasCloudApiKeyFromEnv,
+  resolveAtlasCloudBaseURLFromEnv,
+} from "../providers/atlascloud.js";
+import {
+  resolveAnthropicAuthFromEnv,
+  resolveAnthropicBaseURLFromEnv,
+  resolveAnthropicModelFromEnv,
+} from "./claude-settings.js";
+
+/** A single message in an LLM conversation. */
+export interface LLMMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** A tool definition in Anthropic-style format (used as the canonical shape). */
+export interface LLMTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+/** Embedding input purpose for providers that tune document/query vectors. */
+export type EmbeddingInputType = "document" | "query";
+
+/** Provider-agnostic interface for LLM backends. */
+export interface LLMProvider {
+  complete(system: string, messages: LLMMessage[], maxTokens: number): Promise<string>;
+  stream(
+    system: string,
+    messages: LLMMessage[],
+    maxTokens: number,
+    onToken?: (text: string) => void,
+  ): Promise<string>;
+  toolCall(
+    system: string,
+    messages: LLMMessage[],
+    tools: LLMTool[],
+    maxTokens: number,
+  ): Promise<string>;
+  /** Return a single embedding vector for the given text. */
+  embed(text: string, inputType?: EmbeddingInputType): Promise<number[]>;
+  /** Embed multiple texts in a single provider-native request (optional). */
+  embedBatch?(texts: string[], inputType?: EmbeddingInputType): Promise<number[][]>;
+}
+
+/**
+ * Implementation names `buildProvider` can construct, DERIVED from the accepted
+ * inputs rather than written out again.
+ *
+ * The two used to be separate hand-maintained lists, which is a guard that
+ * rejects what the factory can build as soon as someone updates one and not the
+ * other. Deriving means a new provider is added in exactly one place.
+ */
+const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(
+  SUPPORTED_PROVIDER_INPUTS.map(normalizeProviderName),
+);
+
+/**
+ * Construct the provider named `providerName`, independent of which provider is
+ * "active". Shared by {@link getProvider} for chat and by the embedding-provider
+ * factory, so the two can never drift in how a given backend is built.
+ *
+ * Direct process.env access is acceptable here as this is a system boundary.
+ */
+export function buildProvider(providerName: string): LLMProvider {
+  switch (providerName) {
+    case "anthropic":
+      return getAnthropicProvider();
+    case "claude-agent":
+      return getClaudeAgentProvider();
+    case "codex-agent":
+      return new CodexAgentProvider(readOptionalEnv("LLMWIKI_MODEL"));
+    case "openai":
+      return new OpenAIProvider(getModelForProvider("openai"), {
+        baseURL: readOptionalEnv("OPENAI_BASE_URL"),
+        embeddingsBaseURL: readOptionalEnv("OPENAI_EMBEDDINGS_BASE_URL"),
+        embeddingsApiKey: readOptionalEnv("OPENAI_EMBEDDINGS_API_KEY"),
+        embeddingModel: readOptionalEnv("LLMWIKI_EMBEDDING_MODEL"),
+      });
+    case "ollama":
+      return new OllamaProvider(getModelForProvider("ollama"), {
+        baseURL: readOptionalEnv("OLLAMA_HOST") ?? OLLAMA_DEFAULT_HOST,
+        embeddingsBaseURL: readOptionalEnv("OLLAMA_EMBEDDINGS_HOST"),
+        embeddingModel: readOptionalEnv("LLMWIKI_EMBEDDING_MODEL"),
+      });
+    case "minimax":
+      return getMiniMaxProvider();
+    case "orcarouter":
+      return getOrcaRouterProvider();
+    case "copilot":
+      return getCopilotProvider();
+    case "atlascloud":
+      return getAtlasCloudProvider();
+    default:
+      throw new Error(`Unhandled provider: ${providerName}`);
+  }
+}
+
+/**
+ * Factory returning the provider for CHAT and tool calls, from LLMWIKI_PROVIDER
+ * (default "anthropic") and LLMWIKI_MODEL. Embedding callers use
+ * `getEmbeddingProvider` from `./embedding-provider.js` instead.
+ */
+export function getProvider(): LLMProvider {
+  return buildProvider(getProviderName());
+}
+
+function readOptionalEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
+function getModelForProvider(
+  providerName: "openai" | "ollama" | "minimax" | "copilot" | "atlascloud" | "orcarouter",
+): string {
+  return process.env.LLMWIKI_MODEL ?? PROVIDER_MODELS[providerName];
+}
+
+function getMiniMaxProvider(): MiniMaxProvider {
+  const apiKey = process.env.MINIMAX_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "MiniMax provider requires MINIMAX_API_KEY environment variable.\n" +
+      '  Set it with: export MINIMAX_API_KEY=your_key',
+    );
+  }
+  return new MiniMaxProvider(getModelForProvider("minimax"), apiKey);
+}
+
+/** Build the gateway client with the same nonblank-key rule as the guard. */
+function getOrcaRouterProvider(): OrcaRouterProvider {
+  const apiKey = readOptionalEnv("ORCAROUTER_API_KEY");
+  if (!apiKey) {
+    throw new Error(
+      "OrcaRouter provider requires ORCAROUTER_API_KEY environment variable.\n" +
+      '  Set it with: export ORCAROUTER_API_KEY=your_key',
+    );
+  }
+  return new OrcaRouterProvider(getModelForProvider("orcarouter"), apiKey, readOptionalEnv("LLMWIKI_EMBEDDING_MODEL"));
+}
+
+function getCopilotProvider(): CopilotProvider {
+  const apiKey = process.env.GITHUB_TOKEN;
+  if (!apiKey) {
+    throw new Error(
+      "GitHub Copilot provider requires GITHUB_TOKEN environment variable.\n" +
+      "  Run: gh auth refresh --scopes copilot\n" +
+      "  Then set it with: export GITHUB_TOKEN=$(gh auth token)\n" +
+      "  The token must belong to a GitHub account with an active Copilot subscription.",
+    );
+  }
+  return new CopilotProvider(getModelForProvider("copilot"), apiKey);
+}
+
+function getAtlasCloudProvider(): AtlasCloudProvider {
+  const apiKey = resolveAtlasCloudApiKeyFromEnv();
+  if (!apiKey) {
+    throw new Error(
+      "Atlas Cloud provider requires ATLASCLOUD_API_KEY or ATLAS_CLOUD_API_KEY environment variable.\n" +
+      "  Set one with: export ATLASCLOUD_API_KEY=your_key",
+    );
+  }
+  return new AtlasCloudProvider(
+    getModelForProvider("atlascloud"),
+    apiKey,
+    resolveAtlasCloudBaseURLFromEnv(),
+  );
+}
+
+function getAnthropicProvider(): AnthropicProvider {
+  const model = resolveAnthropicModelFromEnv() ?? PROVIDER_MODELS.anthropic;
+  const baseURL = resolveAnthropicBaseURLFromEnv();
+  const auth = resolveAnthropicAuthFromEnv();
+
+  return new AnthropicProvider(model, {
+    baseURL,
+    ...auth,
+  });
+}
+
+/**
+ * Build the Claude Agent SDK provider. Auth is handled by the local Claude Code
+ * login, so no API key is read here; LLMWIKI_MODEL (or the Claude settings
+ * model) still overrides the default model.
+ */
+function getClaudeAgentProvider(): ClaudeAgentProvider {
+  const model = resolveAnthropicModelFromEnv() ?? PROVIDER_MODELS["claude-agent"];
+  return new ClaudeAgentProvider(model);
+}
+
+function getProviderName(): string {
+  const providerName = normalizeProviderName(process.env.LLMWIKI_PROVIDER ?? DEFAULT_PROVIDER);
+  if (!SUPPORTED_PROVIDERS.has(providerName)) {
+    throw new Error(
+      `Unknown provider "${providerName}". Supported: ${SUPPORTED_PROVIDER_INPUTS.join(", ")}`,
+    );
+  }
+  return providerName;
+}
+
+/** Expose the resolved provider name for callers that need model lookup. */
+export function getActiveProviderName(): string {
+  return getProviderName();
+}
+
+/**
+ * Resolve the model id the compile pipeline would call, without
+ * instantiating a provider (which can require API credentials).
+ *
+ * Used by the export provenance stamp so a downstream auditor can tie a
+ * compiled page back to the exact model that produced it. Mirrors the
+ * per-provider model resolution in {@link getProvider} so the reported id
+ * matches what an actual compile call would use.
+ */
+export function resolveActiveModelId(): string {
+  const providerName = getProviderName();
+  if (providerName === "anthropic") {
+    return resolveAnthropicModelFromEnv() ?? PROVIDER_MODELS.anthropic;
+  }
+  if (providerName === "claude-agent") {
+    return resolveAnthropicModelFromEnv() ?? PROVIDER_MODELS["claude-agent"];
+  }
+  if (providerName === "codex-agent") {
+    return readOptionalEnv("LLMWIKI_MODEL") ?? PROVIDER_MODELS["codex-agent"];
+  }
+  return getModelForProvider(
+    providerName as "openai" | "ollama" | "minimax" | "copilot" | "atlascloud" | "orcarouter",
+  );
+}

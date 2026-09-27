@@ -1,0 +1,120 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "llmwiki",
+  "description": "llmwiki compiles raw sources into persistent, citation-traceable markdown wikis that agents and humans can browse, query, lint, export, import, and reuse.",
+  "theme": "luma",
+  "colors": {
+    "primary": "#5B6AD0",
+    "light": "#EEF0FF",
+    "dark": "#1A1D3A"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/atomicstrata/llm-wiki-compiler"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation",
+              "upgrading-to-1-0",
+              "guides/open-knowledge-format"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/karpathy-pattern",
+              "concepts/how-it-works",
+              "concepts/wiki-model",
+              "concepts/configurable-lifecycle-profiles",
+              "concepts/page-types",
+              "concepts/citations"
+            ]
+          },
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "cli/ingest",
+              "cli/compile",
+              "cli/rm",
+              "cli/query",
+              "cli/view",
+              "cli/status",
+              "cli/lint-eval",
+              "cli/export",
+              "cli/import",
+              {
+                "group": "Configurable Lifecycle Profiles",
+                "expanded": false,
+                "pages": [
+                  "cli/profile",
+                  "cli/workflow",
+                  "cli/artifact",
+                  "cli/connector",
+                  "cli/template"
+                ]
+              },
+              "cli/review",
+              "cli/serve"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/providers",
+              "configuration/environment-variables",
+              "configuration/review-policy",
+              "configuration/schema",
+              {
+                "group": "Configurable Lifecycle Profiles",
+                "expanded": false,
+                "pages": [
+                  "configuration/profiles",
+                  "configuration/autosci-profile",
+                  "configuration/profile-templates"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/mcp-agent-integration",
+              "guides/viewer-themes",
+              "guides/sdk",
+              "guides/atomic-memory-bridge",
+              "guides/ci-quality-gates",
+              {
+                "group": "Configurable Lifecycle Profiles",
+                "expanded": false,
+                "pages": [
+                  "guides/clp/build-your-first-profile",
+                  "guides/autosci-research-workflow",
+                  "guides/newsroom-editorial-workflow",
+                  "guides/publish-template-tap"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": [
+              "troubleshooting/faq",
+              "troubleshooting/stale-pages",
+              "troubleshooting/state-recovery"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

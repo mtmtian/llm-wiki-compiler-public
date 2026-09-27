@@ -1,0 +1,152 @@
+---
+title: "llmwiki import - Import Open Knowledge Format Bundles"
+sidebarTitle: "Import"
+description: "llmwiki import --okf reads an Open Knowledge Format bundle and stages its documents for review by default. Use --trusted only for bundles you already trust."
+---
+
+`llmwiki import --okf` reads an Open Knowledge Format bundle and maps its markdown documents into llmwiki pages. Import does **not** call an LLM. It is a filesystem operation that parses the bundle, maps frontmatter and links, checks collisions, and either stages pages as review candidates or writes them live when you opt into `--trusted`.
+
+By default, import treats a bundle as untrusted external knowledge. Imported pages are staged under `.llmwiki/candidates/` with `reviewMode: imported` and an `imported-okf` hold reason. Review them with `llmwiki review list`, `llmwiki review show`, and `llmwiki review approve` before they become live wiki pages.
+
+---
+
+## Syntax
+
+```bash
+llmwiki import --okf <dir>
+llmwiki import --okf <dir> --dry-run
+llmwiki import --okf <dir> --trusted
+```
+
+| Flag | Description |
+|------|-------------|
+| `--okf <dir>` | Required. Path to the OKF bundle directory. |
+| `--dry-run` | Preview what would be imported or skipped. Makes no writes and does not take the project lock. |
+| `--trusted` | Write valid mapped pages directly into `wiki/` instead of staging review candidates. Use only for bundles you trust. |
+
+---
+
+## Default: stage for review
+
+```bash
+llmwiki import --okf ./partner-bundle
+llmwiki review list
+llmwiki review show <candidate-id>
+llmwiki review approve <candidate-id>
+```
+
+The default path is safest for external bundles:
+
+- Valid pages are written as review candidates under `.llmwiki/candidates/`.
+- Live pages under `wiki/` are not changed until you approve a candidate.
+- Each candidate records the original OKF path, imported provenance, and why it was held.
+- Approval writes the page without re-running the LLM.
+
+Import runs under `.llmwiki/lock` because staging candidates is durable project state. It will fail rather than race with a concurrent compile, refresh, approve, or reject.
+
+When the receiving project has a non-default profile, OKF docs whose
+`x-llmwiki` metadata names a declared entity type are routed through the typed
+profile path. Untrusted imports stage typed review candidates. Trusted imports
+promote typed pages only after the same field, lifecycle, relation, and artifact
+checks used by normal typed writes.
+
+---
+
+## Preview with `--dry-run`
+
+```bash
+llmwiki import --okf ./partner-bundle --dry-run
+```
+
+Dry run reports:
+
+- Pages that would be staged or written
+- The target directory (`concepts` or `queries`)
+- The original OKF path
+- Pages skipped because of collisions or validation failures
+
+Dry run makes no writes, calls no LLM, and does not acquire the project lock.
+
+---
+
+## Trusted imports
+
+```bash
+llmwiki import --okf ./internal-bundle --trusted
+```
+
+`--trusted` writes valid mapped pages directly into `wiki/concepts/` or `wiki/queries/`, then refreshes links, index, MOC, and embeddings where possible. Use it only when you already trust the bundle's contents and self-declared provenance.
+
+<Warning>
+  `--trusted` bypasses human review. Do not use it for arbitrary third-party bundles, user-uploaded bundles, or bundles whose producer you have not verified.
+</Warning>
+
+For non-default profile projects, `--trusted` typed imports still route through
+the typed planner. Bundle relation entries apply only on trusted import and only
+through the validated relation store. Untrusted imports report relation entries
+as skipped instead of staging relation writes.
+
+---
+
+## What gets imported
+
+Every non-reserved `.md` file in the bundle is treated as an OKF document if it has parseable frontmatter and a non-empty `type`.
+
+- `index.md` and `log.md` at the bundle root are metadata and are not imported as pages.
+- Known OKF types that match llmwiki page kinds stay typed as `concept`, `entity`, `comparison`, or `overview`.
+- Unknown foreign types are preserved under imported OKF provenance while the live llmwiki page uses `kind: concept`.
+- Standard OKF `description` maps to llmwiki `summary`.
+- Standard OKF `tags` map to llmwiki `tags`.
+- Imported pages carry `provenanceState: imported` and an `okf:<bundle>` source token.
+- OKF links are converted back to `[[wikilinks]]` when their target path resolves to a known imported page.
+
+Foreign producer-specific frontmatter is preserved under `x-okf.originalFrontmatter`, and the original bundle-relative path is preserved under `x-okf.okfPath`. If you later export with `llmwiki export --target okf`, llmwiki preserves foreign producer keys and raw foreign `type` values while refreshing current standard fields and `x-llmwiki` metadata.
+
+Profile-aware bundles can also carry inert bundle-level `x-llmwiki` metadata:
+profile identity, relation entries, and workflow run summaries. Import compares
+the bundle profile to the active local profile and reports mismatches. It does
+not install or migrate profiles.
+
+---
+
+## Collision and validation behavior
+
+Import is skip-and-warn for page-level problems:
+
+- A page whose slug already exists in `wiki/concepts/` or `wiki/queries/` is skipped.
+- A page whose slug already has a pending review candidate is skipped.
+- If multiple bundle docs map to the same slug, the first path-sorted doc wins and later duplicates are skipped.
+- A page with an empty slug, empty title, or empty body is skipped.
+- A malformed or typeless OKF document is skipped.
+
+Bundle-level safety failures abort the import:
+
+- Bundle path does not exist
+- Bundle exceeds import resource limits
+- A path attempts to escape the bundle by symlink or traversal
+
+llmwiki confines reads to the bundle directory and bounds bundle ingestion by file count, entry count, per-doc bytes, and total bytes.
+
+---
+
+## Round-trip with OKF
+
+```bash
+# Export a compiled wiki as OKF
+llmwiki export --target okf --out ./bundle
+
+# Import it into another llmwiki project for review
+cd ../other-project
+llmwiki import --okf ../first-project/bundle
+llmwiki review approve <candidate-id>
+
+# Re-export after local edits
+llmwiki export --target okf
+```
+
+Round-trip behavior is designed to be honest rather than magical:
+
+- Page content, citations, imported provenance, and foreign producer keys are preserved.
+- Current llmwiki standard fields (`title`, `description`, `tags`, `timestamp`) are used on re-export, so local edits are reflected.
+- An imported page's `createdAt` records when the page was created in the receiving project. Its `updatedAt` comes from the bundle's `timestamp`, and is left unset when the document carries none, so an import never invents an update time.
+- Safe original nested paths are restored on re-export. If the original path is unsafe, non-`.md`, URL-unsafe, reserved, or collides with another page, llmwiki falls back to slug paths such as `concepts/<slug>.md` or `queries/<slug>.md` and reports a warning.

@@ -1,0 +1,260 @@
+---
+title: "template"
+sidebarTitle: "template"
+description: "Install local templates and discover signed remote releases."
+---
+
+Profile templates are install-time packages for `.llmwiki/profile.json`.
+They do not run code and do not change the runtime profile loader.
+
+## List templates
+
+```bash
+llmwiki template list
+```
+
+The list includes the implicit `default` profile plus installable templates such
+as `autosci` and `newsroom`.
+
+## Inspect a template
+
+```bash
+llmwiki template inspect autosci
+```
+
+Inspection prints metadata, the profile id, license, minimum supported llmwiki
+version, derived capabilities, connector bindings, the profile digest, and the
+install command.
+
+## Install a built-in template
+
+```bash
+llmwiki template init autosci
+```
+
+Before writing, the command checks that the active typed corpus is empty. A
+populated default wiki is refused even if `.llmwiki/profile.json` does not exist.
+On success, the command writes `.llmwiki/profile.json` and then attempts to write
+the advisory `.llmwiki/template-lock.json` sidecar. If only the lock write fails,
+the profile remains installed and the command prints a warning.
+
+## Install a local template file
+
+```bash
+llmwiki template init --file ./team-template.json
+```
+
+Local packages are untrusted declarative input. llmwiki reads them with a
+no-follow, size-capped file read and validates the embedded profile before any
+write.
+
+## Replace an existing profile
+
+```bash
+llmwiki template init autosci --force
+```
+
+`--force` only replaces a profile when the typed corpus is empty. Existing pages,
+relations, artifacts, workflow runs, event records, pending or archived review
+candidates, or unresolved typed-store problems cause a refusal.
+
+`llmwiki template init default` never writes a profile. The default profile is
+already active when `.llmwiki/profile.json` is absent.
+
+## Manage remote taps
+
+```bash
+llmwiki template tap add <name> <https-index-url> \
+  --key-id <key-id> \
+  (--key-file <path> | --key-base64 <value>)
+
+llmwiki template tap list [--json]
+llmwiki template tap refresh <name> [--json]
+llmwiki template tap remove <name>
+llmwiki template tap forget <name> --yes
+```
+
+`tap add`, `tap list`, and `tap remove` do not access the network. `tap remove`
+disables the source and retains its key, sequence, publisher pins, revocations,
+and coordinate history.
+
+`tap forget` is the destructive recovery path for a lost root key, moved
+infrastructure, or exhausted continuity store. It permanently deletes that
+tap's roots, publisher pins, revocations, and coordinate history, making a
+later add equivalent to trusting the source fresh. It requires `--yes`.
+
+## Search signed indexes
+
+```bash
+llmwiki template search <query> [--tap <name>] [--json]
+```
+
+Search reads only already accepted signed-index metadata. It does not download
+every matching package. Results from an expired but previously accepted index
+are marked `stale` and cannot introduce unseen coordinates.
+
+An unrefreshed or unavailable tap does not hide verified results from healthy
+taps: unscoped search returns those results plus a warning for each skipped
+tap. Search explicitly scoped with `--tap` remains fail closed.
+
+## Inspect or verify a remote coordinate
+
+```bash
+llmwiki template inspect <tap/publisher/template@version> [--json]
+llmwiki template verify <tap/publisher/template@version> [--json]
+```
+
+These commands fetch a missing content-addressed package from the tap's exact
+origin or reuse cached evidence, then re-run digest, signature, revocation,
+coordinate, and template validation. They do not modify a project.
+
+## Install a signed remote release
+
+Remote installs require an exact qualified coordinate:
+
+```bash
+llmwiki template init community/acme/research@1.2.0
+```
+
+Before confirmation, llmwiki prints the coordinate, profile digest, signing-key
+id, accepted index sequence, and derived capabilities. Use `--yes` only after
+reviewing those values in automation:
+
+```bash
+llmwiki template init community/acme/research@1.2.0 --yes --json
+```
+
+A non-interactive invocation without `--yes` refuses without writing. The
+package is reverified from accepted cached evidence under the project and tap
+state locks before installation. Network I/O never occurs while those locks are
+held.
+
+## Check installed status
+
+```bash
+llmwiki template status
+llmwiki template status --json
+```
+
+For remote releases, status re-verifies the exact installed package and compares
+the active profile with those package bytes. It reports local modifications,
+stale accepted evidence, revocation, unavailable provenance, and the newest
+verified coordinate when an update is available. The advisory lock does not
+authorize behavior and cannot make a modified profile appear clean.
+
+If an update process stops between its journaled writes, status reports
+`interrupted-write`. Run `llmwiki recover`, or retry the update or compile, to
+restore the recorded pre-update profile and provenance before continuing.
+
+## Preview or apply a remote update
+
+```bash
+llmwiki template update --to 1.3.0 --dry-run
+llmwiki template update --to 1.3.0 --yes
+```
+
+The dry run performs no project write. It checks exact old and new releases,
+profile drift, page and field compatibility, relations, artifacts, lifecycle
+requirements, pending review candidates, and active workflow runs. Apply
+repeats the complete check under lock and refuses if project state or tap
+authority changed after the preview.
+
+Remote signatures prove package origin and byte integrity; they do not make
+publisher-authored labels or descriptions safe instructions. llmwiki treats
+non-builtin profile presentation strings as untrusted data when showing them to
+an agent. Remote documentation and example-content import are not part of this
+command surface.
+
+## Author and publish a tap
+
+Publishers use these commands to create keys, sign packages, and build a distribution.
+Everything runs offline; nothing is uploaded.
+
+```bash
+llmwiki template publish init ./my-tap --tap community --publisher acme
+llmwiki template publish add ./incident-response.json --workspace ./my-tap --package-version 1.0.0
+llmwiki template publish build --workspace ./my-tap --expires-in 30d --out ./dist
+```
+
+`init` creates separate Ed25519 tap and publisher keypairs under `my-tap/keys/`
+(mode `0600` on POSIX; Windows access is governed by filesystem ACLs),
+never printing or overwriting a private key, and prints each public key's fingerprint.
+
+`add` validates the package with the production validator, signs its claim, and records
+the coordinate as immutable: the same coordinate may never resolve to different bytes.
+
+`build` advances the sequence, signs the index, writes packages before the index, and
+verifies the whole tree as a consumer would **before** publishing it. The sequence commits
+last, so a failed build leaves the workspace unchanged and a retry is a clean re-run. The
+output must live outside the workspace — otherwise it would publish your private keys. Pass
+`--refresh` to renew an expiring index under a fresh lifetime, or `--force` to republish when
+nothing else changed.
+
+### Rotate and revoke
+
+```bash
+llmwiki template publish rotate --workspace ./my-tap --publisher-key-id acme-publisher-2027-01
+llmwiki template publish rotate --workspace ./my-tap --tap-key-id community-tap-2027-01
+llmwiki template publish revoke --workspace ./my-tap --package-digest sha256:... --reason "superseded"
+llmwiki template publish revoke --workspace ./my-tap --publisher-key-id acme-publisher-2026-01 --reason "rotated"
+```
+
+Rotations and revocations are staged and signed by the next `build`, because a rotation
+claim carries the sequence of the index that publishes it and that sequence is only known
+at build time.
+
+A publisher-key rotation re-signs every package with the successor key: a package signed by
+a retired key stops verifying once the index announces its successor. Payloads and
+content-addressed filenames never change. Revoking the active publisher key requires
+rotating to a successor in the same build.
+
+## Verify a publisher distribution offline
+
+Publishers use this before uploading a built tap. It reads a static distribution
+directory, verifies it exactly as a client verifies downloaded bytes, and writes
+nothing. It never reaches the network.
+
+```bash
+llmwiki template publish verify ./dist \
+  --tap community \
+  --key-id community-tap-2026-01 \
+  --key-file ./community-tap-public-key.txt
+```
+
+All four inputs are required. The directory must contain the exact tree you will
+serve, and nothing else:
+
+```text
+dist/
+  index.json
+  packages/
+    sha256/
+      <payload-digest-hex>.json
+```
+
+An extra, missing, or symlinked entry fails verification. Supply `--key-file` from
+the channel through which you *distribute* the tap key, not from inside the
+directory being verified: a key carried by the tree it verifies proves only
+self-consistency.
+
+Success prints bounded provenance (add `--json` for the same result as an object)
+and exits `0`:
+
+```text
+Verified template publisher distribution.
+Scope: snapshot
+Continuity: not_applicable_no_rotations
+Tap: community
+Sequence: 7
+Tap key: community-tap-2026-01
+Packages: 3
+```
+
+Failure exits non-zero with a bounded reason that never echoes file contents or
+local paths. The command verifies one self-contained snapshot: an index carrying
+`rotations` or a `tapKeyRotation` is refused, because a rotation chain is only
+meaningful against a client's previously pinned key. Verify those from a clean
+client that already pinned the old key.
+
+Tap operators and template publishers can follow [Publish a signed template
+tap](/guides/publish-template-tap) for the protocol and release workflow.

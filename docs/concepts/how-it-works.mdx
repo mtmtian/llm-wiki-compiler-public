@@ -1,0 +1,119 @@
+---
+title: "How llmwiki's Two-Phase Pipeline Compiles Your Sources"
+sidebarTitle: "How It Works"
+description: "Understand llmwiki's two-phase LLM pipeline: concept extraction, page generation, incremental change detection, and hybrid retrieval."
+---
+
+Most knowledge management tools retrieve information at query time - every question re-discovers the same relationships from scratch, and the structure never accumulates. llmwiki takes the opposite approach: it compiles your sources into a persistent, interlinked wiki artifact **before** any query runs. Concepts get their own typed pages. Content shared across multiple sources is merged into one page rather than competing as duplicate chunks. Pages link to each other via `[[wikilinks]]`. When you query with `--save`, the answer becomes a new page and future queries use it as context. Embeddings, BM25 reranking, and wikilink-graph expansion then run over this compiled artifact, narrowing hundreds of pages to a tight, citation-traceable evidence pack.
+
+## The Compile Pipeline
+
+```
+sources/  →  hash check  →  LLM concept extraction  →  page generation  →  [[wikilink]] resolve
+              │                                                             ↓
+              │                                        chunk embeddings  ←  wiki/  →  index.md
+              │                                               ↓
+              │                             semantic search + BM25 rerank + graph expansion
+              │                                               ↓
+              │                                    llmwiki query / context / MCP
+              ↓
+   stale / orphaned pages  →  llmwiki refresh --stale  →  recompile changed owners, clean up orphans
+```
+
+## Two-Phase Compile
+
+llmwiki splits compilation into two distinct phases rather than processing each source end-to-end.
+
+<Steps>
+  <Step title="Phase 1 - Concept Extraction">
+    Every changed source is sent to the LLM, which identifies and extracts the key concepts each source contains. All extractions complete before any page is written. This means the compiler knows the full concept universe - including which concepts appear in multiple sources - before it commits to writing a single file.
+  </Step>
+  <Step title="Phase 2 - Page Generation">
+    For each extracted concept, the LLM generates a structured wiki page with YAML frontmatter, prose body, and `[[wikilinks]]` to related pages. Concepts claimed by more than one source are merged into a single page at this stage instead of producing duplicate files.
+  </Step>
+</Steps>
+
+Splitting the phases eliminates order-dependence: Phase 1 failures are caught before anything is written, cross-source merges happen deterministically, and pages whose sources were all deleted get marked `orphaned` rather than silently disappearing.
+
+## Incremental Compilation
+
+llmwiki avoids re-processing unchanged work at every layer of the pipeline.
+
+<CardGroup cols={3}>
+  <Card title="Source hashing" icon="fingerprint">
+    Every file in `sources/` is SHA-256 hashed and compared against `.llmwiki/state.json`. Only sources whose hash changed - or that are brand new - flow through the LLM pipeline.
+  </Card>
+  <Card title="Embedding updates" icon="database">
+    Chunk embeddings in the active JSON or binary index are content-hash-aware. Re-running on an unchanged corpus skips all embedding work.
+  </Card>
+  <Card title="Cached citations" icon="bookmark">
+    Citation judgements from `llmwiki eval --suite full` are cached in `.llmwiki/eval/citation-cache.jsonl`. Subsequent eval runs only re-judge new pairs.
+  </Card>
+</CardGroup>
+
+Recompiling after editing one source touches only the pages that source contributed to. Re-running on a fully unchanged corpus completes in a few seconds with no LLM calls.
+
+## Hybrid Retrieval
+
+Retrieval runs over the compiled wiki, not raw source chunks.
+
+<Steps>
+  <Step title="Cosine similarity">
+    The v3 embedding index carries page and chunk vectors under qualified page ids, in either JSON or binary storage. A query narrows hundreds of pages to a small top-K via cosine similarity over chunk embeddings.
+  </Step>
+  <Step title="BM25 rerank">
+    The candidate set is reranked using BM25 to boost lexically relevant pages that dense retrieval may have under-ranked.
+  </Step>
+  <Step title="Wikilink-graph expansion">
+    Pages directly linked from the top-K results are pulled in as graph neighbors, broadening the evidence pack with contextually related content the embedding alone might not surface.
+  </Step>
+</Steps>
+
+<Note>
+  When no embedding store is present - for example, when using the GitHub Copilot provider, which has no embeddings endpoint - llmwiki automatically falls back to lexical (index-based) ranking and surfaces a stable warning code rather than hard-failing.
+</Note>
+
+## Source Freshness
+
+Every compiled page records the sources - and their SHA-256 content hashes - that produced it. On any later command, llmwiki compares those recorded hashes against `sources/` on disk:
+
+- **Stale** - a page whose recorded source hashes no longer match the files on disk. The source still exists, but its content changed since the last compile.
+- **Orphaned** - a page whose recorded sources were all deleted from `sources/`.
+
+`llmwiki lint`, `llmwiki status`, the local viewer, the JSON export, and the MCP `wiki_status` tool all surface stale and orphaned pages without triggering a recompile. To repair them, run `llmwiki refresh --stale`: it recompiles only the changed sources that own stale pages and cleans up orphaned pages, deliberately leaving unrelated new sources for a full `llmwiki compile`. Use `--dry-run` to preview the repair plan with no LLM calls or writes.
+
+## Output Structure
+
+A successful compile writes three output locations:
+
+```
+log.md              append-only activity journal
+wiki/
+  concepts/         one .md file per compiled concept page
+  queries/          saved answers from llmwiki query --save
+  index.md          auto-generated table of contents
+.llmwiki/
+  schema.json       optional page-kind and cross-link policy
+  config.json       review policy
+  state.json        per-source content hashes and concept ownership
+  embeddings.json   small-store page and chunk vectors
+  embeddings.bin    binary vectors when selected; takes precedence over JSON
+  candidates/       pages held for review (from --review or review policy)
+  candidates/archive/  rejected candidates kept for audit
+```
+
+## RAG vs. llmwiki
+
+| | Traditional RAG | llmwiki |
+|---|---|---|
+| **Unit of storage** | Raw chunks from source documents | Compiled, typed wiki pages |
+| **Concept merging** | Duplicate chunks compete at retrieval time | Multiple sources merge into one page at compile time |
+| **Structure** | Flat chunk store | Interlinked pages with `[[wikilinks]]` |
+| **Citation tracing** | Chunk-level source reference | Paragraph- and claim-level line-range citations |
+| **Compounding** | Query results are ephemeral | `--save` adds answers back to the wiki as new pages |
+| **Freshness tracking** | None | Stale/orphaned detection per page |
+| **Best for** | Ad-hoc retrieval over noisy, fast-changing corpora | Persistent, citation-traceable knowledge that compounds over time |
+
+<Tip>
+  llmwiki is complementary to traditional RAG, not a replacement. Use RAG for ad-hoc retrieval over fast-changing or noisy source material; use llmwiki when you want a durable, structured, citation-traceable artifact that gets better as you add more sources.
+</Tip>

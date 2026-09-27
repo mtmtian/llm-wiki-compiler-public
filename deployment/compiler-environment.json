@@ -1,0 +1,10 @@
+{
+  "LLMWIKI_PROVIDER": "codex-agent",
+  "LLMWIKI_MODEL": "gpt-5.6-luna",
+  "LLMWIKI_EMBEDDING_PROVIDER": "ollama",
+  "LLMWIKI_EMBEDDING_MODEL": "nomic-embed-text",
+  "OLLAMA_EMBEDDINGS_HOST": "http://127.0.0.1:11434/v1",
+  "LLMWIKI_EMBED_STRICT": "1",
+  "LLMWIKI_OUTPUT_LANG": "zh-CN",
+  "LLMWIKI_COMPILE_CONCURRENCY": "2"
+}

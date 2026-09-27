@@ -1,0 +1,120 @@
+---
+title: "Wiki Schema: Typed Page Kinds and Cross-Link Policies"
+sidebarTitle: "Schema"
+description: "Define .llmwiki/schema.json to enforce page kinds, minimum wikilinks per kind, and seed pages that compile materializes automatically."
+---
+
+The schema layer is entirely optional. Without a schema file, llmwiki compiles every page as a `concept` and applies no cross-link minimums - existing wikis continue to work exactly as they did before the schema layer existed. You only need a schema when you want to enforce structure: typed page kinds, minimum wikilink counts per kind, or seed pages that the compiler should materialize automatically.
+
+## Initializing a schema
+
+Run these commands from your project root:
+
+```bash
+llmwiki schema init   # writes a starter .llmwiki/schema.json
+llmwiki schema show   # prints the resolved schema for the current project
+```
+
+`schema init` writes a template file you can edit. `schema show` always prints the fully-resolved schema, merging your file onto built-in defaults - useful for confirming what the compiler is actually using.
+
+## Schema file location
+
+llmwiki searches for a schema file in the following order, using the first one found:
+
+1. `.llmwiki/schema.json`
+2. `.llmwiki/schema.yaml`
+3. `.llmwiki/schema.yml`
+4. `wiki/.schema.yaml`
+5. `wiki/.schema.yml`
+
+The most common location is `.llmwiki/schema.json` (what `schema init` creates).
+
+## Page kinds
+
+llmwiki supports four page kinds. The compiler uses the kind as context when generating a page, and lint enforces per-kind cross-link minimums.
+
+| Kind | Description | Default `minWikilinks` |
+|---|---|---|
+| `concept` | A standalone idea, technique, or pattern worth documenting | `0` |
+| `entity` | A specific thing - a person, product, organization, or named artifact | `1` |
+| `comparison` | A side-by-side analysis weighing two or more concepts or entities | `2` |
+| `overview` | A top-down map page that situates several concepts within a domain | `3` |
+
+Pages that don't declare a `kind` in frontmatter fall back to the schema's `defaultKind` (which defaults to `concept`).
+
+## Schema structure
+
+A schema file is a JSON (or YAML) document with the following shape:
+
+```json
+{
+  "version": 1,
+  "defaultKind": "concept",
+  "kinds": {
+    "concept": {
+      "minWikilinks": 0,
+      "description": "A standalone idea, technique, or pattern worth documenting."
+    },
+    "entity": {
+      "minWikilinks": 1,
+      "description": "A specific person, product, organization, or named artifact."
+    },
+    "comparison": {
+      "minWikilinks": 2,
+      "description": "A side-by-side analysis weighing two or more concepts or entities."
+    },
+    "overview": {
+      "minWikilinks": 3,
+      "description": "A map page that situates several concepts within a domain."
+    }
+  },
+  "seedPages": [
+    {
+      "title": "Retrieval-Augmented Generation Overview",
+      "kind": "overview",
+      "summary": "A top-level map of retrieval-augmented generation concepts and architectures.",
+      "relatedSlugs": ["dense-retrieval", "bm25-reranking", "context-window"]
+    }
+  ]
+}
+```
+
+Every field is optional - you only need to specify what you want to override. Missing fields inherit their built-in defaults, so a minimal schema that only raises `minWikilinks` for `overview` pages is perfectly valid.
+
+## Seed pages
+
+`seedPages` declares pages the compiler should materialize on each compile run. Each seed page entry requires:
+
+| Field | Required | Description |
+|---|---|---|
+| `title` | Yes | Display title; also used to derive the page slug |
+| `kind` | Yes | One of `concept`, `entity`, `comparison`, `overview` |
+| `summary` | No | One-line summary written into frontmatter |
+| `relatedSlugs` | No | For `overview` and `comparison` kinds - slugs of pages the compiler should weave together as source material |
+
+## How the schema affects compile
+
+When you run `llmwiki compile`:
+
+- **Seed pages** declared in `seedPages` are materialized automatically. For `overview` and `comparison` seeds with `relatedSlugs`, the compiler passes the named pages as the source material.
+- Pages without an explicit `kind` in frontmatter are assigned `defaultKind` (default: `concept`).
+
+## How the schema affects lint
+
+`llmwiki lint` enforces per-kind cross-link minimums after compile:
+
+- A `comparison` page with fewer than `minWikilinks` wikilinks is flagged.
+- An `overview` page that doesn't reach its minimum is flagged.
+- Violations are reported by slug and kind so you can find and fix them.
+
+## How the schema affects review
+
+When a review policy is active with `schema-violating` in the `hold` array, any page that fails a schema cross-link rule is automatically held for review instead of written live. See [Review Policy](/configuration/review-policy) for how to configure that behavior.
+
+<Tip>
+  A schema is most useful for **large wikis**, **domain templates**, and **structured knowledge bases** where you want consistent page structure enforced over time. For a personal notebook or exploratory wiki, you likely don't need one - start without a schema and add one when you find yourself wanting to enforce cross-link density or generate overview pages automatically.
+</Tip>
+
+---
+
+For more on how page kinds behave in the compiler, see [Page Types](/concepts/page-types). For holding schema-violating pages automatically during compile, see [Review Policy](/configuration/review-policy).

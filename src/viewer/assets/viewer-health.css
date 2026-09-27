@@ -1,0 +1,451 @@
+/**
+ * llmwiki viewer — the `#/health` screen.
+ *
+ * Loaded after viewer-dashboard.css because the health screen reuses that
+ * sheet's `.panel` / `.panel-head` / `.panel-title` shell and its `.bar-track`
+ * meter rather than redeclaring either; the one place this sheet overrides a
+ * dashboard rule (`.trace-meter .bar-track`) does so through a compound
+ * selector, so it wins on specificity regardless of link order.
+ *
+ * Values come from the "Nebula - Health screen" mockup tree. Where the mockup
+ * states a literal that is not already a token's exact value — 15px 17px cell
+ * padding, an 11px label margin, the 150px/62px/74px table columns — it is
+ * written as that literal rather than snapped onto the 6/9/12/16/24 spacing
+ * scale. Snapping mockup values onto our scales was the single largest source
+ * of drift in earlier fidelity passes.
+ *
+ * Two mockup-vs-shipped divergences are deliberate:
+ *   - The screen's `padding: 22px 24px 26px` content gutter is 2px taller than
+ *     the Overview mockup's 20px on the SAME shared container (`.content-grid`,
+ *     viewer-chrome.css), which the Overview already pinned. The shared value
+ *     stays; a route-specific override would make the header seam jump by 2px
+ *     on navigation.
+ *   - The mockup is dark-only. Every colour here is a token with a light pair,
+ *     so the screen renders in both themes.
+ */
+
+/* Shares its element with `.main-pane` (viewer.js sets
+ * `className = "main-pane health-pane"`), whose `width: min(100%, 72ch)`
+ * prose cap would squeeze the two-column grid — the same override
+ * `.dashboard`, `.graph-pane`, and `.list-pane` each make. */
+.health-pane { width: 100%; }
+
+.health-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+/* ---- Page head ---- */
+
+.health-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+/* 600 22px/1 sans has no matching token: --type-page-title is the 26px
+ * header identity, this is the in-pane section title (tree line 116). */
+.health-title {
+  margin: 0;
+  font: 600 22px/1 var(--font-sans);
+  letter-spacing: -0.03em;
+  color: var(--fg);
+}
+
+/* 400 11.5px/1 mono has no matching token — tree line 118. */
+.health-lint-run { font: 400 11.5px/1 var(--font-mono); color: var(--fg-faint); }
+
+/* ---- CONTENTS strip ---- */
+
+/* One bordered panel divided into five columns, NOT five cards: five equal
+ * tiles gave a zero the same visual weight as a real figure, and five in a
+ * 3-up grid left a ragged orphan row (mockup notes 03/04). */
+.contents-strip {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.contents-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* 11px 17px is off the spacing scale — tree line 121. */
+  padding: 11px 17px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.contents-eyebrow {
+  font: var(--type-label);
+  letter-spacing: 0.13em;
+  color: var(--fg-ghost);
+}
+
+/* 400 10.5px/1 mono has no matching token — tree line 124. */
+.contents-caption { font: 400 10.5px/1 var(--font-mono); color: var(--fg-faint); }
+
+.contents-columns { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+/* Vertical rules BETWEEN columns only — the trailing edge is the strip's own
+ * border, so the last cell drops its rule rather than doubling it. */
+.contents-cell { padding: 15px 17px; border-right: 1px solid var(--border-soft); }
+.contents-cell:last-child { border-right: none; }
+
+/* 400 11.5px/1 sans has no matching token — tree line 128. */
+.contents-label {
+  font: 400 11.5px/1 var(--font-sans);
+  color: var(--fg-muted);
+  margin-bottom: 11px;
+}
+
+.contents-figure { display: flex; align-items: baseline; gap: 7px; }
+
+/* 600 26px/1 sans is exactly --type-page-title (tree line 131). */
+.contents-value { font: var(--type-page-title); letter-spacing: -0.035em; color: var(--fg); }
+/* An empty count is an absence, not news: the dim dash matches the sidebar's
+ * `nav-count-zero` treatment of the same fact (tree line 155). */
+.contents-value.is-zero { color: var(--fg-disabled); }
+.contents-suffix { font: var(--type-metadata); color: var(--fg-faint); }
+
+/* ---- Two-column body ---- */
+
+.health-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  /* 14px is off the spacing scale — tree line 167. */
+  gap: 14px;
+  align-items: start;
+}
+
+.health-column { display: flex; flex-direction: column; gap: 14px; }
+
+/* Single column below the width where a 1.55fr Lint table and a 1fr rail can
+ * both hold their content; the same breakpoint the dashboard grid uses. */
+@media (max-width: 900px) {
+  .health-grid { grid-template-columns: minmax(0, 1fr); }
+  .contents-columns { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+}
+
+/* ---- Lint panel ---- */
+
+/* Warm framing only while there is something to act on. A clean run — and a
+ * wiki whose lint has never run — keeps `.panel`'s neutral surface, so the
+ * warm tint stays a signal rather than a decoration. */
+.lint-panel { overflow: hidden; }
+.lint-panel.has-problems { border-color: var(--warn-border); background: var(--warn-bg); }
+.lint-panel.has-problems .panel-head { border-bottom-color: var(--warn-divider); }
+
+.lint-head-group { display: flex; align-items: center; gap: 9px; }
+
+/* The "lint has never run" placeholder is a bare `<p>` (viewer-dom.js) with
+ * the browser's default paragraph margin; inset it to the same 18px gutter
+ * the panel's other bands use so it lines up under the head's title. */
+.lint-panel > .placeholder { margin: 0; padding: 16px 18px; }
+
+.lint-chip {
+  font: var(--type-badge);
+  color: var(--warn);
+  background: var(--warn-a13);
+  padding: 4px 6px;
+  border-radius: var(--radius-badge);
+}
+
+/* `align-items: stretch` so the bar column can centre itself against the
+ * full height of the figures beside it (tree line 177). */
+.lint-summary {
+  display: flex;
+  align-items: stretch;
+  gap: 22px;
+  padding: 18px 18px 16px;
+}
+
+.lint-totals { flex: none; }
+.lint-figure-row { display: flex; align-items: baseline; gap: 9px; }
+.lint-figure-row + .lint-figure-row { margin-top: 6px; }
+
+/* The mockup tints the error figure --warn, not --danger: --danger is
+ * reserved here for the single highest-count rule's segment/swatch/name, and
+ * two different reds beside each other would read as two different facts
+ * (tree lines 180/191). */
+.lint-figure.is-errors {
+  font: 600 40px/1 var(--font-sans);
+  letter-spacing: -0.04em;
+  color: var(--warn);
+}
+.lint-figure.is-warnings {
+  font: 600 20px/1 var(--font-sans);
+  letter-spacing: -0.03em;
+  color: var(--fg-body);
+}
+
+/* 400 12.5px/1 sans has no matching token — tree line 182. */
+.lint-figure-label { font: 400 12.5px/1 var(--font-sans); color: var(--fg-muted); }
+.lint-figure-row:last-child .lint-figure-label { color: var(--fg-dim); }
+
+.lint-breakdown {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 9px;
+}
+
+/* Segment widths are CSSOM property writes from viewer-health-lint.js, not
+ * markup `style=` attributes, so `style-src` needs no `'unsafe-inline'` —
+ * the same mechanism the dashboard's citation meter uses. */
+.lint-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border-soft);
+}
+
+.lint-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font: 400 10.5px/1 var(--font-mono);
+  color: var(--fg-dim);
+}
+.lint-legend-item { display: flex; align-items: center; gap: 6px; }
+.lint-swatch { width: 7px; height: 7px; border-radius: 2px; }
+
+/* One palette entry per rank, so a bar segment, its legend swatch, and the
+ * table's rule name always agree on one rule's colour (tree lines 191-207).
+ * Exactly four rules can be ranked — sixteen lint rules exist, and a fifth
+ * colour would have to repeat one of these. */
+.lint-bar-seg[data-rank="0"], .lint-swatch[data-rank="0"] { background: var(--danger); }
+.lint-bar-seg[data-rank="1"], .lint-swatch[data-rank="1"] { background: var(--warn); }
+.lint-bar-seg[data-rank="2"], .lint-swatch[data-rank="2"] { background: var(--accent-text); }
+.lint-bar-seg[data-rank="3"], .lint-swatch[data-rank="3"] { background: var(--ok); }
+.lint-rule[data-rank="0"] { color: var(--danger); }
+.lint-rule[data-rank="1"] { color: var(--warn); }
+.lint-rule[data-rank="2"] { color: var(--accent-text); }
+.lint-rule[data-rank="3"] { color: var(--ok); }
+
+/* The row every rule past the fourth folds into. Neutral rather than a fifth
+ * hue: it stands for several rules at once, none of which owns a colour, and
+ * a fifth hue would have to be one the four above already spend. */
+.lint-bar-seg.is-other, .lint-swatch.is-other { background: var(--fg-dim); }
+.lint-rule.is-other { color: var(--fg-dim); }
+
+/* ---- Rule table ---- */
+
+.lint-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 62px 74px;
+  gap: 12px;
+  padding: 11px 18px;
+  align-items: center;
+  border-bottom: 1px solid var(--warn-divider-soft);
+}
+/* The last row's rule would double the panel's own bottom edge — or, when a
+ * footer band is rendered, that band's top edge (tree line 245 draws no rule
+ * under the final row in either case). */
+.lint-row:last-child, .lint-row:has(+ .lint-footer) { border-bottom: none; }
+
+.lint-row.is-head {
+  padding: 9px 18px;
+  border-top: 1px solid var(--warn-divider);
+  border-bottom: 1px solid var(--warn-divider);
+  font: var(--type-label);
+  letter-spacing: 0.1em;
+  color: var(--fg-ghost);
+}
+.lint-row.is-head > :nth-child(3), .lint-row.is-head > :nth-child(4) { text-align: right; }
+
+/* 500 11.5px/1 mono has no matching token — tree line 219. Colour comes from
+ * the [data-rank] rules above. */
+.lint-rule { font: 500 11.5px/1 var(--font-mono); }
+
+/* 400 12.5px/1.3 sans has no matching token — tree line 221. */
+.lint-affected { font: 400 12.5px/1.3 var(--font-sans); color: var(--fg-muted); }
+
+/* Both text cells truncate rather than wrap: a rule name or a page slug long
+ * enough to wrap would break the row's fixed grid rhythm. */
+.lint-rule, .lint-affected { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 600 13px/1 sans has no matching token — tree line 223. */
+.lint-count { font: 600 13px/1 var(--font-sans); color: var(--fg); text-align: right; }
+
+/* 500 10.5px/1 mono has no matching token — tree line 225. */
+.lint-fix { font: 500 10.5px/1 var(--font-mono); text-align: right; }
+/* Rules that flag files which are not wiki pages have nowhere to navigate;
+ * the dash matches the CONTENTS strip's "nothing here" treatment. */
+.lint-fix.is-plain { color: var(--fg-disabled); }
+
+/* ---- Lint footer ---- */
+
+.lint-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 18px;
+  border-top: 1px solid var(--warn-divider);
+  background: var(--warn-surface);
+}
+
+/* 400 11.5px/1.5 sans has no matching token — tree line 255. `min-width: 0`
+ * makes the sentence, not the button, the flex item that gives way: the
+ * button's label names a page whose slug it cannot truncate and stay honest. */
+.lint-insight { font: 400 11.5px/1.5 var(--font-sans); color: var(--warn-muted); min-width: 0; }
+
+/* The one filled button on the screen. The mockup's label mutates the wiki;
+ * this viewer is a frozen read-only snapshot, so it navigates instead — to
+ * the graph explorer for link-graph rules, to the most-affected page
+ * otherwise. `white-space: nowrap` keeps either label on the button's line. */
+.lint-action {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-row);
+  background: var(--warn);
+  font: 600 12px/1 var(--font-sans);
+  color: var(--warn-surface);
+  flex: none;
+  white-space: nowrap;
+}
+.lint-action:hover, .lint-action:focus-visible { color: var(--warn-surface); opacity: 0.88; }
+
+/* ---- Profile problems panel ---- */
+
+/* Warm framing unconditionally, unlike `.lint-panel` — which only tints once
+ * it has findings. This panel is not rendered at all when the collector found
+ * nothing, so its mere presence already means "something is wrong" and a
+ * neutral surface would understate it. */
+.profile-panel {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  overflow: hidden;
+}
+.profile-panel .panel-head { border-bottom-color: var(--warn-divider); }
+
+/* Overrides the column's shared 16px 17px body padding: rows carry their own
+ * vertical gutter and full-bleed dividers, so the body pads horizontally only. */
+.health-column .profile-panel .panel-body { padding: 0; }
+
+/* Rules BETWEEN rows only — the trailing edge is the panel's own border, or
+ * the footer band's top border when the list was capped. */
+.profile-problem { padding: 11px 17px; border-bottom: 1px solid var(--warn-divider-soft); }
+.profile-problem:last-child { border-bottom: none; }
+
+.profile-problem-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+
+/* Mono, matching the Lint table's rule names: both are stable machine
+ * identifiers, not prose. --warn rather than --danger keeps one warm red on
+ * the screen — --danger is spent on the Lint bar's top-ranked rule.
+ *
+ * `flex: none` so the PATH beside it is the item that gives way: a kind is a
+ * fixed vocabulary the reader matches on sight, and hyphenating it across two
+ * lines ("field-" / "violation") reads as two words rather than one token. */
+.profile-problem-kind {
+  font: 500 11.5px/1 var(--font-mono);
+  color: var(--warn);
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The path (or, for a directory-level problem, the entity type). Truncates
+ * rather than wraps so a deep path cannot push the row's two lines apart;
+ * `direction: rtl` keeps the FILENAME visible when it does, since the leading
+ * directories are the part a reader can afford to lose. */
+.profile-problem-where {
+  font: 400 11px/1 var(--font-mono);
+  color: var(--fg-faint);
+  min-width: 0;
+  direction: rtl;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The collector's own sentence. Wraps freely — it is the one part of the row
+ * that says what actually went wrong, so truncating it would defeat the panel. */
+.profile-problem-message { font: 400 12.5px/1.5 var(--font-sans); color: var(--warn-muted); }
+
+/* The "showing N of M" band, sharing the Lint footer's surface treatment
+ * because it reports the same class of fact: this list is not everything. */
+.profile-footer {
+  padding: 11px 17px;
+  border-top: 1px solid var(--warn-divider);
+  background: var(--warn-surface);
+  font: 400 11.5px/1.5 var(--font-sans);
+  color: var(--warn-muted);
+}
+
+/* ---- Freshness panel ---- */
+
+/* Scoped to this column, NOT a bare `.panel-body` rule: that class is shared
+ * with the Overview's own panels (viewer-dashboard.css, `padding: 5px 8px 8px`),
+ * and this sheet loads after that one — an unscoped override here would
+ * silently re-pad every panel on the dashboard. */
+.health-column .panel-body { padding: 16px 17px; }
+
+/* One bar per concept page. `overflow: hidden` keeps a very large wiki's
+ * bars — whose 4px gaps do not shrink — inside the panel; the note below
+ * always carries the exact counts regardless of how thin they get. */
+.freshness-bars {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.freshness-bar { flex: 1; min-width: 0; height: 26px; border-radius: 3px; }
+.freshness-bar.is-fresh { background: var(--ok); }
+.freshness-bar.is-stale { background: var(--warn); }
+.freshness-bar.is-orphaned { background: var(--danger); }
+/* Freshness could not be computed (missing or corrupt state.json). Not
+ * evidence of a problem with the page, so it takes the "nothing known here"
+ * tone rather than a warning colour — the same rule isWarnFreshness applies
+ * in viewer-format.js. */
+.freshness-bar.is-unverified { background: var(--fg-disabled); }
+
+/* 400 12.5px/1.55 sans has no matching token — tree line 276. */
+.freshness-note { font: 400 12.5px/1.55 var(--font-sans); color: var(--fg-muted); }
+
+/* ---- Traceability panel ---- */
+
+.trace-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+/* 600 26px/1 sans is exactly --type-page-title (tree line 283). */
+.trace-value { font: var(--type-page-title); letter-spacing: -0.035em; color: var(--fg); }
+.trace-detail { font: 400 11.5px/1 var(--font-mono); color: var(--fg-faint); }
+
+/* The shared meter track is 5px on the Overview (tree line 324 of the
+ * Direction mockup); this screen states 6px (tree line 287). Compound
+ * selector so it outranks the base rule without editing it. */
+.trace-meter .bar-track { height: 6px; }
+
+/* 400 12/1.55 sans has no matching token — tree line 290. */
+.trace-note { font: 400 12px/1.55 var(--font-sans); color: var(--fg-muted); margin-top: 11px; }
+
+/* ---- Cache note ---- */
+
+.cache-note {
+  padding: 13px 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  background: var(--bg-sunken);
+  font: 400 11px/1.65 var(--font-mono);
+  color: var(--fg-dim);
+}
+.cache-note code { font: inherit; color: var(--accent-text); }

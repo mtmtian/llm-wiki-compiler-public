@@ -1,0 +1,74 @@
+---
+title: "llmwiki: Compile Raw Sources into an Interlinked Wiki"
+sidebarTitle: "Introduction"
+description: "llmwiki turns URLs, files, and session exports into a persistent, citation-traced markdown wiki with configurable domain profiles, semantic search, and MCP agent integration."
+---
+
+llmwiki is a knowledge compiler. You point it at your sources - research papers, documentation sites, notes, session exports - and it uses an LLM pipeline to compile them into a structured, interlinked wiki that you can browse, search, query, and connect to AI agents. Unlike retrieval-augmented generation (RAG), llmwiki compiles your knowledge once into a durable artifact that compounds over time: concepts get their own typed pages, links form a navigable graph, and every claim traces back to its source.
+
+Configurable Lifecycle Profiles (CLP) let one compiler serve different domains without hardcoded domain behavior. A validated profile can declare entity schemas, typed relations, lifecycle state machines, evidence gates, workflows, artifacts, connector bindings, content tiers, and retrieval policy. Projects without a profile keep the classic concepts-and-queries behavior. New projects can start with the built-in [AutoSci research workflow](/guides/autosci-research-workflow) or [Newsroom editorial workflow](/guides/newsroom-editorial-workflow).
+
+llmwiki also supports [Google Cloud's Open Knowledge Format initiative](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/). You can export a compiled wiki as an OKF bundle, import OKF bundles from other tools through the review queue, and re-export foreign bundles while preserving producer metadata, llmwiki provenance, and safe original nested paths.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Compile your first wiki from a single source in under five minutes.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install llmwiki and configure your LLM provider.
+  </Card>
+  <Card title="How It Works" icon="gears" href="/concepts/how-it-works">
+    Understand the two-phase compile pipeline and hybrid retrieval model.
+  </Card>
+  <Card title="Configurable Lifecycle Profiles" icon="diagram-project" href="/concepts/configurable-lifecycle-profiles">
+    Model typed entities, relations, lifecycles, workflows, artifacts, and connectors as validated configuration.
+  </Card>
+  <Card title="Open Knowledge Format" icon="share-nodes" href="/guides/open-knowledge-format">
+    Exchange compiled knowledge with OKF-aware tools while preserving provenance.
+  </Card>
+  <Card title="MCP Integration" icon="robot" href="/guides/mcp-agent-integration">
+    Connect llmwiki to Claude Desktop, Cursor, or Claude Code via MCP.
+  </Card>
+</CardGroup>
+
+## Make the wiki your own
+
+The [local viewer](/cli/view) offers four themes: Scientific Clay, Minimal, Nebula Light, and Nebula Dark. Scientific Clay is the default, with soft surfaces and rounded typography. Minimal follows your system’s light or dark setting. Switch themes without leaving the page; existing saved light/dark preferences migrate to Nebula. See the [theme guide](/guides/viewer-themes) for preference behavior.
+
+Organize inputs with [recursive source folders and literal path exclusions](/cli/compile#nested-source-folders), supply [project-specific compile instructions](/cli/compile), and use [binary embedding storage](/configuration/environment-variables) for larger indexes. Binary storage avoids the JSON serialization limit; semantic retrieval still requires the index to fit in memory.
+
+## What llmwiki gives you
+
+**A compiled wiki, not raw chunks.** Instead of storing document chunks and re-discovering relationships at every query, llmwiki runs a two-phase LLM pipeline that extracts concepts, merges duplicates across sources, and generates typed wiki pages - each with citations back to the original source lines.
+
+**A domain model without a domain fork.** Install a declarative template or author `.llmwiki/profile.json` to define the entities, relations, lifecycle gates, workflows, artifacts, and connectors for your project. The same generic runtime validates and surfaces every profile across the CLI, SDK, MCP, viewer, context packs, lint, status, and export.
+
+**Semantic search that gets smarter.** After compiling, llmwiki builds chunk-level embeddings. When you run `llmwiki query`, it narrows hundreds of pages to a top-K via cosine similarity, reranks with BM25, and expands along the wikilink graph - giving you a tight, citation-traceable evidence pack.
+
+**A local web viewer.** `llmwiki view` opens your compiled wiki in a browser - sidebar navigation, full-text search, a force-directed page graph, and provenance chips on every paragraph.
+
+**Agent-ready via MCP.** `llmwiki serve` exposes the full pipeline to Claude Desktop, Cursor, Claude Code, and any MCP-compatible agent. Agents can ingest sources, compile, query, lint, retrieve context packs, and exchange OKF bundles without touching the CLI.
+
+**Open Knowledge Format round-trip.** `llmwiki export --target okf` writes a Google OKF-style bundle with page docs, references, and an activity log. `llmwiki import --okf` stages external bundles for review by default, so third-party knowledge does not touch your live wiki until you approve it. Imported foreign pages re-export at their safe original paths when possible.
+
+**Programmatic control via SDK.** `createWiki({ root })` drives the entire pipeline in-process - no shelling out, no console noise, fully typed, including OKF import/export.
+
+## Who uses llmwiki
+
+- **AI researchers and engineers** building durable knowledge bases from papers, docs, and notes
+- **Technical writers** compiling scattered sources into a structured, interlinked reference
+- **Open-source maintainers** turning READMEs, ADRs, and design docs into a navigable knowledge base
+- **Developers** who want to give their AI agents persistent, well-structured context
+
+## Compile, don't just retrieve
+
+```
+RAG:     query → search chunks → answer → forget
+llmwiki: sources → compile → wiki → embed → query → save → richer wiki → better answers
+```
+
+Use RAG for ad-hoc retrieval over noisy, fast-changing corpora. Use llmwiki when you want a persistent, structured, citation-traceable artifact that compounds as you add more sources and ask more questions.
+
+<Note>
+  llmwiki requires Node.js ≥ 24 and an LLM provider credential (Anthropic API key, OpenAI-compatible endpoint, Ollama, GitHub Copilot, or local Claude Code login). See [Installation](/installation) for setup details.
+</Note>

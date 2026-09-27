@@ -1,0 +1,131 @@
+---
+title: "Gate CI on llmwiki Wiki Quality Scores and Thresholds"
+sidebarTitle: "CI Quality Gates"
+description: "Use llmwiki eval with threshold configuration to fail CI when wiki health, citation coverage, or citation quality drops below your defined minimums."
+---
+
+A compiled wiki is a living artifact. Every time you ingest new sources and recompile, you introduce changes - new pages, updated content, shifted citations. Without a quality gate, a recompile can silently degrade your wiki: citation precision can drop, health score can fall, and stale provenance can creep in unnoticed.
+
+`llmwiki eval` gives you a quantitative score for each of these dimensions and exits non-zero when any configured threshold is breached. Wire it into CI and you get the same protection for your knowledge base that lint and tests give you for your code.
+
+## How the exit code works
+
+`llmwiki eval` measures your wiki and prints a report. When you have a `.llmwiki/eval/thresholds.yaml` file, it compares each measured score against your configured minimums. If any threshold is breached, the command exits with a non-zero status code. Your CI pipeline treats that as a failed step.
+
+```bash
+llmwiki eval --suite fast   # exits 0 if all thresholds pass, non-zero if any fail
+```
+
+The report always prints regardless of exit code, so you can read exactly which thresholds were violated and by how much.
+
+## Threshold configuration
+
+Create `.llmwiki/eval/thresholds.yaml` in your project to configure minimum acceptable scores. All fields are optional - omit any field to skip checking that metric.
+
+```yaml
+health_score: 85
+citation_coverage_percent: 70
+citation_precision_percent: 90
+citation_support_mean: 1.4   # only checked with --suite full
+source_utilization_rate: 0.9
+source_warnings_max: 0
+claim_level_citation_rate: 0.5
+```
+
+### Field reference
+
+<ParamField body="health_score" type="number (0–100)">
+  Composite lint health score. Aggregates all lint rules - errors (broken citations, broken wikilinks, duplicate concepts) cost more than warnings. A freshly compiled, well-cited wiki with no broken links typically scores above 90.
+</ParamField>
+
+<ParamField body="citation_coverage_percent" type="number (0–100)">
+  Fraction of prose paragraphs across the wiki that carry at least one `^[...]` citation marker. Higher values indicate that more of your content is explicitly grounded in source material.
+</ParamField>
+
+<ParamField body="citation_precision_percent" type="number (0–100)">
+  Fraction of citation markers that point to a source file that actually exists in `sources/`. A value below 100 means some citations reference deleted or renamed source files. `llmwiki lint` reports the specific broken citations.
+</ParamField>
+
+<ParamField body="citation_support_mean" type="number (0–2)">
+  Average LLM-judged support score across a sample of `(claim, source span)` pairs. The judge scores each pair 0 (unsupported), 1 (partially supported), or 2 (fully supported). **This threshold is only checked when you run `--suite full`** - it is silently skipped on the fast suite.
+</ParamField>
+
+<ParamField body="source_utilization_rate" type="number (0–1)">
+  Fraction of valid ingested sources that are actually cited by at least one wiki page. A value below 1.0 means some sources were compiled but none of the resulting pages cite them - which may indicate orphaned content or extraction gaps.
+</ParamField>
+
+<ParamField body="source_warnings_max" type="number">
+  Maximum number of excluded sources permitted. Sources are excluded from compilation when they cannot be safely processed - for example, out-of-tree symlinks that fall outside `sources/`. Setting this to `0` fails the build if any such sources exist.
+</ParamField>
+
+<ParamField body="claim_level_citation_rate" type="number (0–1)">
+  Fraction of citation markers that include a specific line range (e.g. `^[source.md:42-58]`) rather than citing only the whole file. Higher values mean your wiki's provenance is more precisely pinned and verifiable.
+</ParamField>
+
+## GitHub Actions example
+
+Add a wiki quality check step to your workflow. The fast suite needs no LLM API calls, so it is free to run and fast enough for standard CI:
+
+```yaml
+name: Wiki quality gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  wiki-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install llmwiki
+        run: npm install -g llm-wiki-compiler
+
+      - name: Check wiki quality
+        run: llmwiki eval --suite fast
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+<Note>
+  `--suite fast` checks health score, citation coverage, citation precision, source utilization, source warnings, and claim-level citation rate without any LLM API calls. If you include `citation_support_mean` in your thresholds, switch to `--suite full` - but be aware it will use your LLM provider and incur token costs proportional to the number of citations sampled.
+</Note>
+
+## Tracking history
+
+Every `llmwiki eval` run that records results appends a line to `.llmwiki/eval/history.jsonl`. Use `llmwiki eval history` to see a trend table across past runs:
+
+```bash
+llmwiki eval history        # shows all recorded runs
+llmwiki eval history --n 10 # limit to the last 10 entries
+```
+
+The trend table shows health score, citation coverage, citation precision, and corpus stats (page count, source count, wiki character count) for each run - making it easy to spot regressions after a recompile.
+
+## Regression deltas
+
+Each eval report is automatically diffed against the previous entry in `history.jsonl`. The report prints delta values - for example `health_score: 91 (−4)` - so you can see at a glance whether a recompile improved or degraded your wiki quality. Deltas are also available in the structured `EvalReport.delta` field when using the SDK.
+
+## Re-printing the latest report
+
+You can re-print the most recent eval report without re-running the full harness:
+
+```bash
+llmwiki eval report
+```
+
+This is useful for reviewing results in CI logs or sharing the current state of a wiki without triggering another eval run.
+
+<Tip>
+  Start with lenient thresholds and tighten them over time as you improve your wiki's citation hygiene. A reasonable starting point for a new wiki might be `health_score: 70` and `citation_coverage_percent: 50` - enough to catch severe regressions without blocking every early commit. As your corpus matures and citations stabilize, raise the thresholds toward your target quality bar.
+</Tip>
+
+## Next steps
+
+- See [CLI reference: llmwiki lint and eval](/cli/lint-eval) for all eval flags, the `judgements` subcommand, and the citation judgement cache.

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "enabled": true,
+  "wikiRoot": "${HOME}/.local/share/llm-wiki-compiler/knowledge-flow-state/replica/current",
+  "stateDir": "${HOME}/.local/share/llm-wiki-compiler/knowledge-flow-state",
+  "node": "${NODE}",
+  "gh": "${GH}",
+  "worker": "${RUNTIME}/knowledge-flow/worker.mjs",
+  "eventDriven": {
+    "enabled": false,
+    "debounceSeconds": 120
+  },
+  "sessionConsolidation": {
+    "enabled": true,
+    "quietSeconds": 300,
+    "maxWaitSeconds": 1800
+  },
+  "model": "gpt-5.6-luna",
+  "maxProposals": 5,
+  "maxPendingPerProject": 10,
+  "maxQueuedJobs": 30,
+  "maxJobBytes": 120000,
+  "maxProcessEventBytes": 600000,
+  "maxContextChars": 2400,
+  "maxDailyJobs": 100,
+  "environment": {
+    "LLMWIKI_EMBEDDING_PROVIDER": "ollama",
+    "LLMWIKI_EMBEDDING_MODEL": "nomic-embed-text",
+    "OLLAMA_EMBEDDINGS_HOST": "http://127.0.0.1:11434/v1",
+    "LLMWIKI_EMBED_STRICT": "1"
+  },
+  "intakeEnabled": false,
+  "excludedPaths": [
+    "${HOME}/.local/share/llm-wiki-compiler"
+  ],
+  "projects": {}
+}

@@ -1,0 +1,10 @@
+{
+  "machineId": "example-machine",
+  "wikiRoot": "${HOME}/Documents/Example Wiki",
+  "projectPaths": {
+    "sample-project": [
+      "${HOME}/work/sample-project"
+    ]
+  },
+  "excludedPaths": []
+}

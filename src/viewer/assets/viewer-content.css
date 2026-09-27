@@ -1,0 +1,509 @@
+/**
+ * llmwiki viewer — page content, search, health route, and list routes.
+ *
+ * Everything no earlier stylesheet claimed: the main pane itself, rendered
+ * markdown (`.rendered-body`), the header search control and its results
+ * dropdown, citation chips (`src/viewer/citation-rule.ts`), freshness
+ * badges/caption, the support rail's warnings block, the warning/corrupt
+ * banners, the health route, and the list routes
+ * (`#/concepts`, `#/queries`, `#/sources`). Every colour here is a token
+ * from viewer-tokens.css — no raw colour literals — so both themes stay
+ * correct automatically. The base reset (`body`, `:focus-visible`,
+ * `.skip-link`) already lives in viewer-tokens.css and is not repeated
+ * here.
+ *
+ * Loads directly after viewer-tokens.css and before viewer-chrome.css,
+ * viewer-dashboard.css, and viewer-graph.css. `.dashboard`, `.graph-pane`,
+ * and `.list-pane` below all override `.main-pane`'s prose-width cap from
+ * a later-loaded sheet or later in this same file; moving this file's
+ * `<link>` would silently break those overrides (see each file's own
+ * header for the mechanism).
+ */
+
+/* ---- Main pane ---- */
+
+/*
+ * `.main-pane` no longer carries its own padding: it sits inside
+ * `.content-grid` (viewer-chrome.css), which supplies the outer gutter
+ * for both the main pane and the support rail together (mockup tree line
+ * 97). A second padding here would double-inset every route's content —
+ * see the fidelity audit's A2 note on the rail's nesting.
+ */
+.main-pane {
+  width: min(100%, var(--max-content-width));
+  overflow-x: auto;
+}
+.main-pane:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+
+/* Page-level title shared by every route (page view, list routes, health,
+ * index) — the routes that don't use this heading put it inside their own
+ * wrapper instead (e.g. `.rendered-body`'s own headings, below). */
+.main-pane > h1 { margin: 0 0 var(--space-16); color: var(--fg-strong); }
+
+/* ---- Rendered markdown body ---- */
+
+.rendered-body h1, .rendered-body h2, .rendered-body h3,
+.rendered-body h4, .rendered-body h5, .rendered-body h6 {
+  margin: var(--space-24) 0 var(--space-12);
+  color: var(--fg-strong);
+  line-height: 1.3;
+}
+.rendered-body > :first-child { margin-top: 0; }
+
+.rendered-body p { margin: 0 0 var(--space-16); color: var(--fg-body); }
+
+.rendered-body ul, .rendered-body ol {
+  margin: 0 0 var(--space-16);
+  padding-left: 1.4em;
+  color: var(--fg-body);
+}
+.rendered-body li { margin-bottom: var(--space-6); }
+
+.rendered-body pre {
+  margin: 0 0 var(--space-16);
+  padding: var(--space-12) var(--space-16);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-sunken);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.rendered-body code {
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-badge);
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--fg-body);
+}
+.rendered-body pre code { padding: 0; background: none; }
+
+/* Dangling wikilink — `src/viewer/wikilink-rule.ts` renders an unresolved
+ * `[[slug]]` as this span. Shares the graph's dangling-node colour
+ * (`--danger`, see viewer-graph.css) so "this reference doesn't resolve"
+ * reads the same way everywhere in the viewer. */
+[data-missing="true"] {
+  color: var(--danger);
+  text-decoration: underline dotted;
+  text-decoration-color: var(--danger);
+  text-underline-offset: 0.18em;
+}
+
+/* Citation chip — `src/viewer/citation-rule.ts` renders one per parsed
+ * `^[source.md]` span. `[data-resolved="false"]` flips it to the warn
+ * family so an unresolvable source stands out inline, not just on hover. */
+.citation-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 2px;
+  border-radius: var(--radius-chip);
+  background: var(--bg-chip);
+  border: 1px solid var(--border-chip);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  vertical-align: 0.05em;
+}
+.citation-chip[data-resolved="false"] {
+  background: var(--warn-a12);
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+/* ---- Query question banner (#/queries/<slug> pages) ---- */
+
+.query-question {
+  margin: 0 0 var(--space-16);
+  padding: var(--space-12) var(--space-16);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--bg-card);
+  font: 500 13px/1.5 var(--font-sans);
+  font-style: italic;
+  color: var(--fg-body);
+}
+
+/* ---- Warning / corrupt-state banners ---- */
+
+.warning-banner,
+.corrupt-state-banner {
+  margin: 0 0 var(--space-16);
+  padding: var(--space-12) var(--space-16);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font: var(--type-body);
+}
+
+/* ---- Freshness badges (support rail: STALE / ORPHANED / CONTRADICTED / ARCHIVED) ---- */
+
+.freshness-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  margin-bottom: var(--space-9);
+}
+.freshness-badge {
+  display: inline-block;
+  padding: 3px 7px;
+  border-radius: var(--radius-badge);
+  font: var(--type-badge);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* Source-freshness axis: stale (ageing) vs orphaned (nothing points here) —
+ * orphaned reads as the more severe of the two, so it takes the danger tone. */
+.badge-stale       { background: var(--warn-a12);    color: var(--warn); border: 1px solid var(--warn-border); }
+.badge-orphaned    { background: var(--danger-a12);  color: var(--danger); }
+/* Provenance axis: contradicted borrows the accent family (an editorial
+ * flag, not a freshness problem); archived is neutral, matching .stat-badge. */
+.badge-contradicted { background: var(--accent-a12); color: var(--accent-text); border: 1px solid var(--accent-a30); }
+.badge-archived     { background: var(--bg-chip);    color: var(--fg-dim); border: 1px solid var(--border-chip); }
+
+.freshness-caption {
+  margin-top: var(--space-9);
+  font: var(--type-metadata);
+  font-style: italic;
+  color: var(--fg-dim);
+}
+
+/* ---- Support rail: warnings block ---- */
+
+/*
+ * A typed page's DECLARED fields. The `<dl>` itself needs no rule — the rail's
+ * own `.support-rail dt/dd` already style it — so only the pieces the fixed list
+ * has no equivalent for are defined here.
+ *
+ * The label is MONO because it is a frontmatter key, not prose: it is the exact
+ * string the author typed and the reader may have to type back. Same reasoning
+ * as the run id on a workflow row.
+ */
+/* Scoped to `.support-rail` to out-specify `.support-rail dt` in
+ * viewer-chrome.css (0-1-1) — a bare `.entity-field-label` (0-1-0) loses to it
+ * and the label would silently render in the sans face this comment denies. */
+.support-rail .entity-field-label { font: var(--type-metadata); color: var(--fg-dim); }
+.entity-field-list { list-style: none; margin: 0; padding: 0; }
+.entity-field-item { color: var(--fg-body); }
+/* A formatted field leaves the viewer, so it looks like a link rather than
+ * inheriting the rail's plain body colour. `--accent-text`, not `--accent`:
+ * the latter is the graphics fill (graph nodes, gradients), and text uses the
+ * readable-on-background variant. */
+.entity-field-link { color: var(--accent-text); text-decoration: underline; }
+
+/* An enum value is a state, not free text — so it takes the neutral chip recipe
+ * this stylesheet already uses for `.workflow-flag`, rather than #/pipeline's,
+ * which is tuned for a denser panel and sits in its own sheet. */
+.entity-field-state {
+  display: inline-block;
+  font: var(--type-badge);
+  color: var(--fg-dim);
+  background: var(--bg-chip);
+  border: 1px solid var(--border-chip);
+  padding: 3px 6px;
+  border-radius: var(--radius-badge);
+}
+
+/* An artifact ref is a machine handle; the note beside it says it is unchecked.
+ * `--fg-dim` rather than a fainter rung: the whole point of the note is that it
+ * gets read, and the fainter tokens do not clear 4.5:1 at this size. */
+.entity-field-ref { font: var(--type-provenance); color: var(--fg-body); }
+
+/* Verified material stays legible without widening the support rail or executing markup. */
+.access-metadata { margin: var(--space-9) 0; overflow-wrap: anywhere; }
+.access-label { font: var(--type-metadata); color: var(--fg-dim); margin-top: var(--space-9); }
+.access-value { margin: 0; color: var(--fg-body); }
+.source-preview, .artifact-preview {
+  max-width: 100%;
+  max-height: 65vh;
+  overflow: auto;
+  padding: var(--space-12);
+  background: var(--bg-inset);
+  color: var(--fg-body);
+  font-family: var(--font-mono);
+  white-space: pre;
+}
+.source-preview mark { background: var(--bg-chip); color: var(--fg-strong); }
+.artifact-download { margin-left: var(--space-9); color: var(--accent-text); }
+.artifact-limit, .artifact-empty, .source-access-note { color: var(--fg-dim); }
+.entity-field-unresolved {
+  display: block;
+  font: var(--type-metadata);
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
+.support-rail-warnings {
+  margin-top: var(--space-16);
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--border-soft);
+}
+.support-rail-warnings h2 {
+  font: var(--type-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin: 0 0 var(--space-9);
+}
+.support-rail-warnings ul { list-style: none; margin: 0; padding: 0; }
+.support-rail-warnings li { margin-bottom: var(--space-6); color: var(--fg-body); }
+.support-rail-reason { color: var(--fg-dim); }
+
+/* ---- Header search control ---- */
+
+/*
+ * `.sidebar-search` is the outer fixed-width control (mockup tree line 83)
+ * and the positioning context for its results dropdown — `position:
+ * relative` here is why the ⌘K binding in viewer-search.js can move the
+ * whole widget out of the sidebar without the dropdown losing its anchor.
+ * The name is a holdover from when the control lived in `.sidebar`; kept
+ * because renaming buys nothing and the class still means "the search
+ * control," not "a sidebar-only thing."
+ */
+.sidebar-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-9);
+  width: 290px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+}
+/* Decorative circle standing in for the mockup's search glyph (tree line
+ * 84) — the search affordance itself is the real `<input>` beside it. */
+.search-icon {
+  width: 12px;
+  height: 12px;
+  border: 1.4px solid var(--fg-faint);
+  border-radius: 50%;
+  flex: none;
+}
+.sidebar-search input[type="search"] {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+  /* 12.5px matches --type-body, but the mockup's search text is line-height
+   * 1, not --type-body's 1.5 (tree line 85) — a literal, not the token. */
+  font: 400 12.5px/1 var(--font-sans);
+  color: var(--fg-body);
+}
+.sidebar-search input[type="search"]::placeholder { color: var(--fg-faint); }
+.sidebar-search input[type="search"]::-webkit-search-decoration,
+.sidebar-search input[type="search"]::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+/* The ⌘K hint chip — advertises the shortcut wireSearchShortcut() binds.
+ * `500 10px/1 mono` (mockup tree line 87) has no matching type token —
+ * the closest, --type-metadata, is 400 11px/1 — so it is a literal here,
+ * same pattern as `.project-status` in viewer-chrome.css. */
+.search-kbd {
+  flex: none;
+  padding: 3px 5px;
+  border-radius: var(--radius-badge);
+  background: var(--bg-chip);
+  border: 1px solid var(--border-chip);
+  font: 500 10px/1 var(--font-mono);
+  color: var(--fg-faint);
+}
+
+/*
+ * Results dropdown: absolutely positioned against `.sidebar-search` (see
+ * above) so it overlays page content instead of pushing the header's other
+ * actions sideways — the sidebar-column layout this used to share space
+ * with no longer exists once search lives in the header.
+ */
+.search-results {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 320px;
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border-radius: var(--radius-panel);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+}
+.search-results[hidden] { display: none; }
+.search-results .empty {
+  padding: var(--space-9) var(--space-12);
+  font: var(--type-body);
+  font-style: italic;
+  color: var(--fg-dim);
+}
+.search-results a {
+  display: block;
+  padding: var(--space-9) var(--space-12);
+  border-radius: var(--radius-row);
+  color: var(--fg-body);
+}
+.search-results a:hover, .search-results a:focus-visible {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+.result-kind {
+  display: block;
+  font: var(--type-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.result-title { display: block; font: 500 13px/1.35 var(--font-sans); color: var(--fg-strong); }
+.result-snippet { display: block; margin-top: 2px; font: var(--type-body); color: var(--fg-dim); }
+
+/* ---- List routes (#/concepts, #/queries, #/sources) ---- */
+
+/*
+ * `.list-pane` shares its element with `.main-pane` (viewer-lists.js sets
+ * `className = "main-pane list-pane"`), whose `width: min(100%, 72ch)`
+ * caps prose width. A list row (dot + title + citation chip + age) needs
+ * the full pane width for the same reason `.dashboard` and `.graph-pane`
+ * do — same specificity, later in this file, so `width: 100%` here wins
+ * back the full pane without touching the prose rule other routes rely on.
+ */
+.list-pane { width: 100%; }
+
+.list-body { display: flex; flex-direction: column; }
+
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-9);
+  padding: var(--space-12) 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.list-row:last-child { border-bottom: none; }
+
+.list-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-row);
+  color: var(--fg-body);
+}
+a.list-title:hover, a.list-title:focus-visible { color: var(--accent-hover); text-decoration: underline; }
+
+.list-citations {
+  flex: none;
+  font: var(--type-badge);
+  color: var(--fg-faint);
+  background: var(--bg-chip);
+  border: 1px solid var(--border-chip);
+  padding: 3px 6px;
+  border-radius: var(--radius-badge);
+}
+.list-citations.is-warn { color: var(--warn); background: var(--warn-a12); border-color: var(--warn-border); }
+
+.list-age { flex: none; font: var(--type-metadata); color: var(--fg-faint); }
+
+.list-caption { margin: 0 0 var(--space-12); font: var(--type-body); color: var(--fg-dim); }
+
+.list-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-9);
+  margin: 0 0 var(--space-16);
+}
+.list-filter-label {
+  font: var(--type-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.list-filter-select {
+  padding: 6px 10px;
+  border-radius: var(--radius-control);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  font: var(--type-body);
+  color: var(--fg-body);
+}
+
+/* ---- Review queue (#/reviews) ---- */
+
+/*
+ * A review row STACKS where a page row is one centred line. A page row can
+ * stay a single line because its title links to the page carrying the detail;
+ * a candidate has no page to open yet, so the row itself has to carry the
+ * evidence — summary, provenance, and why it is held. Both `.review-row`
+ * overrides below are single-class selectors declared after `.list-row`, so
+ * they win on order without raising specificity.
+ */
+.review-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.review-head { display: flex; align-items: baseline; gap: var(--space-9); }
+.review-summary { margin: 0; font: var(--type-body); color: var(--fg-dim); }
+.review-sources { margin: 0; font: var(--type-metadata); color: var(--fg-faint); }
+
+.review-reasons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.review-reason {
+  font: var(--type-badge);
+  color: var(--warn);
+  background: var(--warn-a12);
+  border: 1px solid var(--warn-border);
+  padding: 3px 6px;
+  border-radius: var(--radius-badge);
+}
+
+/* ---- Workflow runs (#/workflows) ---- */
+
+/*
+ * A run row STACKS for the same reason a review row does: there is no page to
+ * open, so the row itself carries the evidence — which workflow, which stage,
+ * what it is parked on, and the command that moves it.
+ *
+ * `.is-parked` and `.is-problem` are the only rows that earn an accent rail. A
+ * run merely running or completed needs nothing from the reader; a parked one
+ * is blocked on a human and an unreadable one is broken, and the rail is what
+ * makes those two scannable down a long list. The two-class selectors sit after
+ * `.list-row`, so the left border wins on specificity as well as order.
+ */
+.workflow-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.workflow-row.is-parked { border-left: 2px solid var(--warn); padding-left: var(--space-12); }
+.workflow-row.is-problem { border-left: 2px solid var(--danger); padding-left: var(--space-12); }
+
+.workflow-head { display: flex; align-items: baseline; gap: var(--space-9); }
+/* A run row's head ends in the run id, which belongs at the far edge like any
+ * other row metadatum. A problem row's ends in a CHIP, which reads as detached
+ * out there — so only there does the title stop growing into the gap. */
+.workflow-row.is-problem .list-title { flex: none; }
+/* Mono: a run id is a machine fact, not prose (see the lockup tagline note). */
+.workflow-run-id { flex: none; font: var(--type-metadata); color: var(--fg-faint); }
+.workflow-meta { margin: 0; font: var(--type-body); color: var(--fg-dim); }
+.workflow-problem { margin: 0; font: var(--type-body); color: var(--danger); }
+
+.workflow-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.workflow-flag {
+  font: var(--type-badge);
+  color: var(--fg-faint);
+  background: var(--bg-chip);
+  border: 1px solid var(--border-chip);
+  padding: 3px 6px;
+  border-radius: var(--radius-badge);
+}
+.workflow-flag.is-parked { color: var(--warn); background: var(--warn-a12); border-color: var(--warn-border); }
+/* No border: matches `.badge-orphaned`, the existing danger chip. */
+.workflow-flag.is-problem { color: var(--danger); background: var(--danger-a12); border-color: transparent; }
+
+/* The command that unparks the run. Mono and dimmed — it is a fact to copy,
+ * not a control: the viewer is read-only and cannot run it. */
+.workflow-next { margin: 2px 0 0; font: var(--type-provenance); color: var(--fg-faint); }
+
+/* Prose, not a command: the trust-gate note explains why the obvious approval
+ * is the wrong one, so it takes the body face and the warn colour the parked
+ * rail already uses — it must be read, where the command below it is copied. */
+.workflow-note { margin: 2px 0 0; font: var(--type-body); color: var(--warn); }

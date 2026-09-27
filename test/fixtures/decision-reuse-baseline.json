@@ -1,0 +1,1453 @@
+{
+  "fixture": "synthetic-chinese-decision-reuse-v1",
+  "sourceRevision": "32e20b1815160002e93194d008893c3bed5f4e5f",
+  "retrieval": "real task + hook contexts; fixture has no embedding index, so lexical fallback is used",
+  "caseCount": 34,
+  "taskExactSetPass": 15,
+  "taskExactSetDenominator": 33,
+  "hookExactSetPass": 15,
+  "hookExactSetDenominator": 33,
+  "bothExactSetPass": 15,
+  "taskExpectedRecallRows": 26,
+  "taskExpectedRecallDenominator": 28,
+  "hookExpectedRecallRows": 26,
+  "hookExpectedRecallDenominator": 28,
+  "taskForbiddenContaminationRows": 0,
+  "taskForbiddenContaminationDenominator": 9,
+  "hookForbiddenContaminationRows": 0,
+  "hookForbiddenContaminationDenominator": 9,
+  "taskNoEvidenceFailures": 4,
+  "taskNoEvidenceDenominator": 5,
+  "hookNoEvidenceFailures": 4,
+  "hookNoEvidenceDenominator": 5,
+  "rows": [
+    {
+      "id": "architecture-why-reuse",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "为什么沿用现有知识链，不另建一条记忆管道？",
+      "expected": [
+        "concepts/repo-architecture#不另建第二管道"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#不另建第二管道",
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#不另建第二管道",
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "architecture-pipeline",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "原始来源、主题页和 hook 之间如何串起来？",
+      "expected": [
+        "concepts/repo-architecture#当前知识链"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#当前知识链",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#当前知识链",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "architecture-entry",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "新增决策检索要接入哪个既有入口？",
+      "expected": [
+        "concepts/repo-architecture#扩展入口"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-test-decisions#当前测试入口",
+          "concepts/repo-test-decisions#当前报告入口",
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#扩展入口",
+          "concepts/repo-test-decisions#当前测试入口",
+          "concepts/repo-test-decisions#当前报告入口",
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-test-decisions#当前测试入口",
+          "concepts/repo-test-decisions#当前报告入口",
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#扩展入口",
+          "concepts/repo-test-decisions#当前测试入口",
+          "concepts/repo-test-decisions#当前报告入口",
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "architecture-communication",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "怎么减少持续推进项目时反复解释背景的沟通成本？",
+      "expected": [
+        "concepts/repo-architecture#降低沟通成本"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "architecture-patch-debt",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "怎样避免功能小补丁累积后破坏代码结构？",
+      "expected": [
+        "concepts/repo-architecture#降低沟通成本"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "current-test-entry",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "当前的决策验收测试放在哪个目录、使用什么入口？",
+      "expected": [
+        "concepts/repo-test-decisions#当前测试入口"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "current-report-entry",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "现在从哪里运行决策检索报告，报告包含什么？",
+      "expected": [
+        "concepts/repo-test-decisions#当前报告入口"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#当前报告入口"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#当前报告入口"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "history-old-test-approach",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "历史上为什么不再为每个决策问题单独写测试？",
+      "expected": [
+        "concepts/repo-test-decisions#历史测试尝试"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#历史测试尝试"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#历史测试尝试"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "history-pipeline-reason",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "以前为什么没有保留独立记忆数据库方案？",
+      "expected": [
+        "concepts/repo-architecture#不另建第二管道"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "same-page-current-test",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "现在测试用例和报告由什么实现？",
+      "expected": [
+        "concepts/repo-test-decisions#当前测试入口",
+        "concepts/repo-test-decisions#当前报告入口"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-test-decisions#历史测试尝试"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#当前报告入口",
+          "concepts/repo-test-decisions#历史测试尝试",
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-test-decisions#历史测试尝试"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#当前报告入口",
+          "concepts/repo-test-decisions#历史测试尝试",
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "same-page-history-test",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "旧测试组织方法的问题是什么？",
+      "expected": [
+        "concepts/repo-test-decisions#历史测试尝试"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#历史测试尝试",
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#历史测试尝试",
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "same-page-current-and-history",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "测试现在怎么组织，过去尝试过什么？",
+      "expected": [
+        "concepts/repo-test-decisions#当前测试入口",
+        "concepts/repo-test-decisions#历史测试尝试"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": false,
+        "missingExpected": [
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#历史测试尝试"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": false,
+        "missingExpected": [
+          "concepts/repo-test-decisions#当前测试入口"
+        ],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-test-decisions#历史测试尝试"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [],
+      "repeat": {
+        "firstChars": 361,
+        "secondChars": 361,
+        "summarizedRepeat": false
+      }
+    },
+    {
+      "id": "generic-project-structure",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "project-boundary",
+      "prompt": "这个项目的结构怎么安排？",
+      "expected": [],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/growth-marketing"
+      ]
+    },
+    {
+      "id": "generic-project-extension",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "这个项目的结构要怎么扩展新的功能？",
+      "expected": [
+        "concepts/repo-architecture#扩展入口"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#扩展入口"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#扩展入口"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/growth-marketing"
+      ]
+    },
+    {
+      "id": "generic-project-principle",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "项目结构扩展时怎样复用已有决策？",
+      "expected": [
+        "concepts/shared-project-principle#跨项目复用原则"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/growth-marketing"
+      ]
+    },
+    {
+      "id": "growth-is-not-code",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "代码项目的结构和决策如何避免被广告投放材料干扰？",
+      "expected": [
+        "concepts/repo-architecture#不另建第二管道"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": false,
+        "missingExpected": [
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "unexpected": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": false,
+        "missingExpected": [
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "unexpected": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则",
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/growth-marketing"
+      ]
+    },
+    {
+      "id": "growth-terms-no-hit-in-code",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "本代码项目的广告回收倍数、代理预算与素材结构怎么决策？",
+      "expected": [],
+      "mustHaveNoEvidence": true,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#降低沟通成本",
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#降低沟通成本",
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#降低沟通成本",
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#降低沟通成本",
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/growth-marketing"
+      ]
+    },
+    {
+      "id": "growth-in-own-project",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "增长投放项目的广告回收倍数和代理预算如何一起检查？",
+      "expected": [
+        "concepts/growth-marketing#广告预算决策"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/growth-marketing#广告预算决策"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/growth-marketing#广告预算决策"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "growth-creative-structure",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "增长代理和素材在结构诊断里如何区分？",
+      "expected": [
+        "concepts/growth-marketing#代理与素材结构"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/growth-marketing#代理与素材结构"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/growth-marketing#代理与素材结构"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "shared-principle-repo",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "跨项目时应该先检查哪些配置与边界？",
+      "expected": [
+        "concepts/shared-project-principle#跨项目复用原则"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "shared-principle-growth",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "增长项目如何复用通用的系统配置原则？",
+      "expected": [
+        "concepts/shared-project-principle#跨项目复用原则"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "shared-principle-project-split",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "什么时候拆分能力，什么时候复用现有入口？",
+      "expected": [
+        "concepts/shared-project-principle#跨项目复用原则"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "semantic-repo-shared-principle",
+      "phase": "initial",
+      "scope": "semantic",
+      "acceptance": "exact-evidence",
+      "prompt": "跨项目开发时怎样复用现有入口并记录责任边界？",
+      "expected": [
+        "concepts/shared-project-principle#跨项目复用原则"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/growth-marketing"
+      ]
+    },
+    {
+      "id": "semantic-repo-unrelated-growth",
+      "phase": "initial",
+      "scope": "semantic",
+      "acceptance": "exact-evidence",
+      "prompt": "知识编译链的引用证据如何回到原始来源？",
+      "expected": [
+        "concepts/repo-architecture#当前知识链"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/growth-marketing"
+      ]
+    },
+    {
+      "id": "semantic-growth-shared-principle",
+      "phase": "initial",
+      "scope": "semantic",
+      "acceptance": "exact-evidence",
+      "prompt": "增长项目如何复用跨项目的系统配置和责任边界原则？",
+      "expected": [
+        "concepts/shared-project-principle#跨项目复用原则"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/repo-architecture"
+      ]
+    },
+    {
+      "id": "semantic-growth-unrelated-code",
+      "phase": "initial",
+      "scope": "semantic",
+      "acceptance": "exact-evidence",
+      "prompt": "代理素材投放的预算和广告回收倍数、成熟窗口如何检查？",
+      "expected": [
+        "concepts/growth-marketing#广告预算决策"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/growth-marketing#代理与素材结构"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/growth-marketing#广告预算决策",
+          "concepts/growth-marketing#代理与素材结构"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/growth-marketing#代理与素材结构"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/growth-marketing#广告预算决策",
+          "concepts/growth-marketing#代理与素材结构"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": [
+        "concepts/repo-architecture"
+      ]
+    },
+    {
+      "id": "no-evidence-weather",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "下周东京的降雨概率和气温是多少？",
+      "expected": [],
+      "mustHaveNoEvidence": true,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "no-evidence-credential",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "当前数据库管理员密码是多少？",
+      "expected": [],
+      "mustHaveNoEvidence": true,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#不另建第二管道"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "no-evidence-unrelated-code",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "如何用 Rust 编写蓝牙温度传感器驱动？",
+      "expected": [],
+      "mustHaveNoEvidence": true,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/shared-project-principle#跨项目复用原则"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "timeline-history-before-follow-up",
+      "phase": "initial",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "2024年为什么选择 Markdown 主题页作为知识投影？",
+      "expected": [
+        "concepts/decision-timeline#历史决定（2024）"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/decision-timeline#历史决定（2024）",
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/decision-timeline#历史决定（2024）",
+          "concepts/repo-architecture#当前知识链"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "timeline-current-after-follow-up",
+      "phase": "after-follow-up",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "现在知识页采用哪种可审阅投影，后来追加了什么？",
+      "expected": [
+        "concepts/decision-timeline#当前决定（2026）"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#当前知识链",
+          "concepts/decision-timeline#历史决定（2024）"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#当前知识链",
+          "concepts/decision-timeline#历史决定（2024）",
+          "concepts/decision-timeline#当前决定（2026）"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#当前知识链",
+          "concepts/decision-timeline#历史决定（2024）"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#当前知识链",
+          "concepts/decision-timeline#历史决定（2024）",
+          "concepts/decision-timeline#当前决定（2026）"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "timeline-history-survives-follow-up",
+      "phase": "after-follow-up",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "后续材料追加后，2024年选择 Markdown 的原因还是什么？",
+      "expected": [
+        "concepts/decision-timeline#历史决定（2024）"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/decision-timeline#当前决定（2026）"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/decision-timeline#历史决定（2024）",
+          "concepts/decision-timeline#当前决定（2026）"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/decision-timeline#当前决定（2026）"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/decision-timeline#历史决定（2024）",
+          "concepts/decision-timeline#当前决定（2026）"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "timeline-current-history-distinction",
+      "phase": "after-follow-up",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "请分别说明 2024 年历史决定和 2026 年当前决定。",
+      "expected": [
+        "concepts/decision-timeline#历史决定（2024）",
+        "concepts/decision-timeline#当前决定（2026）"
+      ],
+      "mustHaveNoEvidence": false,
+      "task": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/decision-timeline#历史决定（2024）",
+          "concepts/decision-timeline#当前决定（2026）"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": true,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/decision-timeline#历史决定（2024）",
+          "concepts/decision-timeline#当前决定（2026）"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    },
+    {
+      "id": "no-evidence-after-follow-up",
+      "phase": "after-follow-up",
+      "scope": "project",
+      "acceptance": "exact-evidence",
+      "prompt": "本机现在的磁盘剩余空间是多少？",
+      "expected": [],
+      "mustHaveNoEvidence": true,
+      "task": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "warnings": [
+          "embedding-index-outdated"
+        ]
+      },
+      "hook": {
+        "pass": false,
+        "expectedRecall": true,
+        "missingExpected": [],
+        "unexpected": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "forbiddenHits": [],
+        "actual": [
+          "concepts/repo-architecture#降低沟通成本"
+        ],
+        "status": "degraded",
+        "complete": true
+      },
+      "forbiddenPageIds": []
+    }
+  ]
+}

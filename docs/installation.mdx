@@ -1,0 +1,243 @@
+---
+title: "Installing llmwiki: npm Setup and Provider Configuration"
+sidebarTitle: "Installation"
+description: "Install llmwiki globally with npm and configure Anthropic, OpenAI-compatible, Ollama, GitHub Copilot, Claude Agent SDK, or Codex CLI."
+---
+
+llmwiki is a Node.js CLI that you install once globally with npm. After installation, you point it at an LLM provider by setting a handful of environment variables - or in some cases, no variables at all if you're already logged into Claude Code. This page covers the full installation process and every supported provider.
+
+## Requirements
+
+<Warning>
+  llmwiki requires **Node.js >= 24**. This is a hard minimum - the package will not run on earlier versions. Check your current version with `node --version` and update via [nodejs.org](https://nodejs.org) or a version manager (`nvm`, `fnm`) if needed.
+</Warning>
+
+- **Node.js >= 24** (see warning above)
+- **npm** (bundled with Node.js)
+- **Provider credentials** - required for compile and query; ingest is credential-free (see [Provider Setup](#provider-setup) below)
+
+## Install llmwiki
+
+Version **1.2.0** includes profile-aware browsing, source and artifact drill-down, and compile/provider improvements. Windows path fixes are included, but release CI is Linux-only and full Windows filesystem-confinement guarantees remain unverified. Use Linux for untrusted projects until [the Windows safety work](https://github.com/atomicstrata/llm-wiki-compiler/issues/175) is complete.
+
+### Platform limitations in the next release
+
+The next release adds checks for private-file reads and append-only stores when
+the operating system lacks native no-follow flags. A file must be regular and
+retain the same filesystem identity before and after opening; missing stores
+are created exclusively. Filesystems that cannot supply a nonzero file identity
+are refused rather than read without that check.
+
+This fallback has been tested through capability simulations, **not on a native
+Windows runner**. It does not establish full Windows support. Native POSIX
+no-follow and nonblocking behavior is unchanged. Directory-handle verification,
+including offline template verification and anchored tap-key reads, refuses
+operation where the required directory flags are unavailable. Continue using
+Linux for untrusted projects; the Windows CI work remains open.
+
+Install the `llm-wiki-compiler` package globally. The package registers the `llmwiki` binary on your `PATH`:
+
+```bash
+npm install -g llm-wiki-compiler
+```
+
+Verify the installation:
+
+```bash
+llmwiki --version
+# or
+llmwiki --help
+```
+
+## Provider Setup
+
+llmwiki calls an LLM during the compile and query phases. It does **not** require credentials for `ingest`, `view`, `lint`, `status`, or any other read-only operation. Configure your provider by setting the environment variables below - or place them in a `.env` file in your project directory and llmwiki will load them automatically.
+
+<Tabs>
+  <Tab title="Anthropic (default)">
+    Anthropic is the default provider - no `LLMWIKI_PROVIDER` variable is needed. Set either `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`; one is sufficient.
+
+    ```bash
+    export ANTHROPIC_API_KEY=sk-ant-...
+    # or, for Anthropic-compatible gateways that expect a different header:
+    export ANTHROPIC_AUTH_TOKEN=<token>
+    ```
+
+    To use a custom proxy or Anthropic-compatible endpoint, set `ANTHROPIC_BASE_URL`:
+
+    ```bash
+    export ANTHROPIC_API_KEY=sk-ant-...
+    export ANTHROPIC_BASE_URL=https://proxy.example.com
+    ```
+
+    **Zero-export shortcut.** If you already have Claude Code configured, llmwiki falls back to reading `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_MODEL` from `~/.claude/settings.json` (the `env` block). If those values are present there, you can run `llmwiki compile` with no exports at all.
+
+    **Configuration precedence:**
+    1. Shell environment / local `.env`
+    2. Claude Code settings fallback (`~/.claude/settings.json` → `env` block)
+    3. Built-in provider defaults
+  </Tab>
+
+  <Tab title="Claude Agent SDK">
+    The `claude-agent` provider routes calls through the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript) and authenticates using your **local Claude Code login** (OAuth/subscription). If you can run `claude` in your terminal, this provider works with no API key.
+
+    ```bash
+    export LLMWIKI_PROVIDER=claude-agent
+    export LLMWIKI_MODEL=claude-sonnet-4-6  # optional; this is the default
+    llmwiki compile
+    ```
+
+    **Notes:**
+    - Compile and structured extraction work off the local login with no extra credentials.
+    - `llmwiki query` uses semantic embeddings, which the Claude Agent SDK does not provide. Set `VOYAGE_API_KEY` to enable embeddings; otherwise `query` falls back to lexical ranking.
+    - Set `LLMWIKI_DEBUG=1` for a concise per-message trace, or `LLMWIKI_DEBUG=verbose` for the SDK's full verbose logging.
+
+    <Warning>
+      The `claude-agent` provider drives your Claude Code / Agent SDK session programmatically. Before using it, review Anthropic's current [Claude Code](https://www.anthropic.com/legal/consumer-terms) and Agent SDK terms to ensure your intended use complies with them.
+    </Warning>
+  </Tab>
+
+  <Tab title="OpenAI Codex CLI">
+    The `codex-agent` provider uses your local Codex CLI login and ChatGPT
+    subscription. llmwiki never handles the stored credential or an OpenAI API
+    key. Install and authenticate Codex first, then choose an existing embedding
+    backend explicitly:
+
+    ```bash
+    npm install -g @openai/codex@latest
+    codex login
+    export LLMWIKI_PROVIDER=codex-agent
+    export LLMWIKI_EMBEDDING_PROVIDER=ollama
+    export OLLAMA_HOST=http://localhost:11434/v1
+    llmwiki compile
+    ```
+
+    You can also select it for one run with
+    `llmwiki compile --provider codex-agent`. Codex runs non-interactively in an
+    ephemeral read-only sandbox and a throwaway directory. It does not expose a
+    `maxTokens` option; model overrides pass through via `LLMWIKI_MODEL`.
+
+    The minimum verified compatible Codex CLI version is **0.152.1**. Run
+    `codex --version` to check it; if llmwiki reports an incompatible binary,
+    update `@openai/codex` to the latest release.
+
+    Explicit Codex Agent selection bypasses the project `.env` file so llmwiki
+    cannot accidentally read API keys stored there. Export the provider,
+    embedding backend, model, and related embedding settings in your shell.
+  </Tab>
+
+  <Tab title="OpenAI-compatible">
+    Use the `openai` provider for OpenAI itself or any OpenAI-compatible local server (llama.cpp, vLLM, etc.). Include `/v1` in custom base URLs.
+
+    ```bash
+    export LLMWIKI_PROVIDER=openai
+    export OPENAI_API_KEY=sk-...
+    # For a custom or local endpoint:
+    export OPENAI_BASE_URL=http://localhost:8080/v1
+    ```
+
+    To use a separate endpoint for embeddings (optional - defaults to the same base URL as chat):
+
+    ```bash
+    export LLMWIKI_PROVIDER=openai
+    export LLMWIKI_MODEL=qwen3.6-35b
+    export LLMWIKI_EMBEDDING_MODEL=text-embedding-model
+    export OPENAI_API_KEY=sk-local   # any non-empty value works for local servers
+    export OPENAI_BASE_URL=http://host_url:port/v1
+    export OPENAI_EMBEDDINGS_BASE_URL=http://host_url:port/v1
+    ```
+
+    <Note>
+      `OPENAI_API_KEY` is required by the OpenAI SDK even for local servers that don't check authentication. Use any non-empty dummy value (e.g. `sk-local`) in that case.
+    </Note>
+  </Tab>
+
+  <Tab title="Ollama">
+    Ollama is supported via its OpenAI-compatible endpoint. Set `OLLAMA_HOST` for chat calls. If your embeddings are served from a different host, set `OLLAMA_EMBEDDINGS_HOST`; otherwise embeddings reuse `OLLAMA_HOST`. Include `/v1` in both URLs.
+
+    ```bash
+    export LLMWIKI_PROVIDER=ollama
+    export LLMWIKI_MODEL=llama3.1
+    export LLMWIKI_EMBEDDING_MODEL=nomic-embed-text
+    export OLLAMA_HOST=http://localhost:11434/v1
+    # Optional: separate embeddings endpoint
+    export OLLAMA_EMBEDDINGS_HOST=http://localhost:11435/v1
+    ```
+
+    <Note>
+      Local models often need more than the default 10-minute request timeout. Override with `OLLAMA_TIMEOUT_MS` (Ollama-specific, wins over `LLMWIKI_REQUEST_TIMEOUT_MS`) or set `LLMWIKI_REQUEST_TIMEOUT_MS` for a provider-agnostic override. Ollama's built-in default is 30 minutes.
+    </Note>
+  </Tab>
+
+  <Tab title="GitHub Copilot">
+    The `copilot` provider uses the GitHub Copilot API (`https://api.githubcopilot.com`), an OpenAI-compatible endpoint available to Copilot subscribers. It requires a GitHub OAuth token with the `copilot` scope - **classic personal access tokens (PATs) are not supported**.
+
+    First, refresh your `gh` CLI token to include the required scope:
+
+    ```bash
+    gh auth refresh --scopes copilot
+    ```
+
+    Then configure the provider:
+
+    ```bash
+    export LLMWIKI_PROVIDER=copilot
+    export GITHUB_TOKEN=$(gh auth token)   # OAuth token required; PATs will not work
+    export LLMWIKI_MODEL=gpt-4o            # optional; gpt-4o is the default
+    ```
+
+    Available models (use dots, not dashes in names): `gpt-4o`, `gpt-4o-mini`, `claude-sonnet-4.5`, `claude-sonnet-4.6`, `claude-opus-4.5`, `gemini-2.5-pro`, and others - availability depends on your Copilot plan.
+
+    <Note>
+      The GitHub Copilot API does not expose an embeddings endpoint. `llmwiki query` will fall back to full-index lexical selection without semantic ranking. For embedding-dependent workflows, switch to the `openai` provider and supply `OPENAI_API_KEY`.
+    </Note>
+  </Tab>
+</Tabs>
+
+### Different backends for chat and embeddings
+
+You can serve embeddings from a different provider than chat - for example, Claude Agent SDK for generation with a local vLLM instance serving vectors:
+
+```bash
+export LLMWIKI_PROVIDER=claude-agent
+export LLMWIKI_EMBEDDING_PROVIDER=openai
+export OPENAI_EMBEDDINGS_BASE_URL=http://localhost:8000/v1
+export LLMWIKI_EMBEDDING_MODEL=<your-local-embedding-model>
+```
+
+A self-hosted endpoint needs no API key. Without `OPENAI_EMBEDDINGS_BASE_URL`, you must set `OPENAI_API_KEY`. If the endpoint belongs to a hosted service rather than your own machine, set `OPENAI_EMBEDDINGS_API_KEY` too - otherwise your `OPENAI_API_KEY` is sent there.
+
+Switching an existing project to a different embedding backend re-embeds every page on the next `llmwiki compile`, because vectors from different backends are not comparable.
+
+See [Environment Variables](/configuration/environment-variables) for the full `LLMWIKI_EMBEDDING_PROVIDER` credential reference.
+
+## Overriding the Model
+
+To use a different model than the provider's default, set `LLMWIKI_MODEL`:
+
+```bash
+export LLMWIKI_MODEL=claude-opus-4-5
+```
+
+This works with any provider and is applied globally to all compile and query calls in the current session.
+
+## Using a .env File
+
+You can store provider configuration in a `.env` file at the root of your wiki project directory. llmwiki loads it automatically on every command:
+
+```bash
+# .env (in your wiki project directory)
+ANTHROPIC_API_KEY=sk-ant-...
+LLMWIKI_MODEL=claude-sonnet-4-6
+```
+
+Variables in the shell environment take precedence over `.env` values.
+
+## Next Steps
+
+Upgrading an existing 0.11 project? Follow [Upgrading from 0.11 to 1.0](/upgrading-to-1-0)
+for the compatibility checks and one-time embedding index transition.
+
+For a full reference on every provider option, proxy configuration, request timeouts, and output language settings, see [Provider Configuration](/configuration/providers).
+
+Ready to compile your first wiki? Head to the [Quickstart](/quickstart).

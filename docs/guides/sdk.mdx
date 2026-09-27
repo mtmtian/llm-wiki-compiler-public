@@ -1,0 +1,250 @@
+---
+title: "Using the llmwiki SDK for Programmatic Wiki Control"
+sidebarTitle: "SDK"
+description: "Use createWiki() to drive llmwiki in-process from TypeScript or JavaScript - ingest, compile, query, lint, and export without shelling out."
+---
+
+The llmwiki SDK lets you drive the entire wiki pipeline from inside your own TypeScript or JavaScript application. Instead of spawning a child process and scraping CLI output, you import `createWiki` directly from the package and call methods that return typed results. Every method runs silently - no console output, no global state - and concurrent calls are fully isolated via `AsyncLocalStorage`.
+
+Use the SDK when you are embedding llmwiki in your own tooling: a build script, a CI harness, a REST API, a test suite, or any context where you want structured results and clean composability. Use the CLI when you are working interactively from the terminal. Use the MCP server when you want AI agents to drive the pipeline - see [MCP Integration](/guides/mcp-agent-integration).
+
+## Installation
+
+The SDK is part of the same package as the CLI. No separate install is needed:
+
+```bash
+npm install llm-wiki-compiler
+```
+
+Then import `createWiki` from the package entry point:
+
+```ts
+import { createWiki } from "llm-wiki-compiler";
+```
+
+## Creating a wiki instance
+
+`createWiki({ root })` returns a `Wiki` facade bound to a project directory. Pass an absolute or relative path - it is normalized once via `path.resolve` at construction time, so subsequent `cwd` changes in the calling process do not affect it.
+
+```ts
+import { createWiki } from "llm-wiki-compiler";
+
+const wiki = createWiki({ root: "./my-wiki" });
+```
+
+A missing root is valid - `ingest` and `ingestText` create `sources/` via recursive `mkdir` on first write. If the path already exists and is not a directory, `createWiki` throws immediately with a clear error.
+
+## Complete example
+
+```ts
+import { createWiki } from "llm-wiki-compiler";
+
+const wiki = createWiki({ root: "./my-wiki" });
+
+// Ingest raw text safely (no network fetch)
+await wiki.ingestText({ title: "Notes", text: "Raw text to compile..." });
+
+// Compile pending sources into wiki pages (requires LLM credentials)
+await wiki.compile();
+
+// Ask a question and get a grounded answer
+const { answer } = await wiki.query("What did I note about X?");
+console.log(answer);
+
+// Read a read-only status snapshot - no credentials needed
+const status = await wiki.status();
+console.log(`${status.pages.total} pages, ${status.sources} sources`);
+```
+
+## Method reference
+
+### Ingest
+
+<ParamField body="wiki.ingest({ source })" type="Promise<IngestResult>">
+  Fetch a URL or read a local file path into `sources/`. Does not require LLM credentials.
+
+  **Trusted input only.** This method performs a server-side fetch and local file read - it is an SSRF and path-traversal primitive. Pass only URLs and paths you control. For untrusted or user-supplied content, use `ingestText` instead.
+</ParamField>
+
+<ParamField body="wiki.ingestText({ title, text })" type="Promise<IngestResult>">
+  Ingest raw text directly as a source document. Does not require LLM credentials, and performs no network fetch or file read - making it the safe path for untrusted content.
+
+  Note: ingested content is later sent to the LLM during `compile`, so adversarially crafted text is still a prompt-injection vector at that stage.
+</ParamField>
+
+Both methods return `IngestResult` with `filename`, `chars`, and `truncated` fields.
+
+### Compile
+
+<ParamField body="wiki.compile(options?)" type="Promise<CompileResult>">
+  Run the incremental compile pipeline. Extracts concepts from new or changed sources, generates typed wiki pages, resolves `[[wikilinks]]`, and rebuilds the index. **Requires LLM credentials.**
+
+  - `options.review` - when `true`, writes generated pages to `.llmwiki/candidates/` for review instead of directly to `wiki/`. Same behavior as `llmwiki compile --review`.
+  - `options.systemPolicy` - extra instructions appended to the built-in compile prompts, for deployment-specific editorial or publication guidance without forking the prompts. Additive: it never replaces a built-in instruction, and it is placed before the source material. Blank or omitted leaves the prompt unchanged.
+
+    It is **advisory, not enforceable**. A policy makes the model more likely to follow a rule; it cannot make it obey one, and nothing verifies that it did. Anything that must hold belongs in a lint rule or a trust gate.
+
+    Changing it **regenerates the pages compiled under the previous policy**, the same way changing the output language does, so it costs a full compile of the affected pages. Each page records the policy's digest (never its text) in `promptModifiers`.
+  - `options.embeddings` - set to `false` to skip embedding generation and pending-embedding retries. Page generation, links, and the lexical index still run.
+
+  Source content is sent to the configured LLM provider during compilation. Do not compile wikis containing confidential data unless the provider's data-handling policies are acceptable for that content.
+
+  There is no progress callback in v1. On a large corpus, this call can run for several minutes with no intermediate feedback.
+</ParamField>
+
+### Query and search
+
+<ParamField body="wiki.query(question, options?)" type="Promise<QueryResult>">
+  Generate a grounded answer from the compiled wiki. **Requires LLM credentials.**
+
+  - `options.save` - persist the answer as a page in `wiki/queries/` and rebuild the index immediately; future queries use it as context.
+  - `options.debug` - include retrieval detail (selected chunks, scores) in the result.
+
+  Returns `QueryResult` with `answer`, `pages`, and (when `debug` is set) `debug` fields.
+</ParamField>
+
+<ParamField body="wiki.search(question)" type="Promise<PageRecord[]>">
+  Select and hydrate the most relevant page records for a question. Uses semantic embeddings when available, falls back to LLM-based index selection. **Requires LLM credentials.**
+
+  Returns an array of full `PageRecord` objects including frontmatter and body.
+</ParamField>
+
+### Pages and sources
+
+<ParamField body="wiki.getPage(ref)" type="Promise<Page | null>">
+  Read a single wiki page by directory and slug reference. Returns `null` if not found. No credentials required.
+</ParamField>
+
+<ParamField body="wiki.listPages(options?)" type="Promise<ListPagesResult>">
+  List wiki pages with optional filters and cursor-based pagination. No credentials required.
+</ParamField>
+
+<ParamField body="wiki.listSources(options?)" type="Promise<ListSourcesResult>">
+  List ingested source files under `sources/` with optional cursor pagination. Bodies are opt-in via `includeBody`. No credentials required.
+</ParamField>
+
+<ParamField body="wiki.getSource(id)" type="Promise<SourceRecord | null>">
+  Read a single source record by its basename (e.g. `"note.md"` - the `filename` field from `IngestResult`). Always includes body. Returns `null` if the source does not exist. No credentials required.
+</ParamField>
+
+<ParamField body="wiki.deleteSource(id)" type="Promise<boolean>">
+  Remove a source file from `sources/`. Returns `true` if deleted, `false` if not found. The compiled page in `wiki/` is not removed immediately - reconciliation happens on the next `compile()`. No credentials required.
+</ParamField>
+
+### Status and quality
+
+<ParamField body="wiki.status()" type="Promise<WikiStatus>">
+  Return a read-only snapshot of the wiki - page counts, source counts, last compile time, stale and orphaned pages, pending changes, and `pendingCandidates`. No credentials required.
+
+  **Performance note:** each call hashes the full source corpus (O(total source bytes)) with no cross-call caching. Do not call `status()` in a hot loop.
+</ParamField>
+
+<ParamField body="wiki.lint()" type="Promise<LintSummary>">
+  Run all lint rules and return a severity-counted summary - broken wikilinks, orphaned pages, duplicate concepts, empty pages, broken citations, stale pages, and more. No credentials required.
+
+  **Performance note:** same per-call corpus-hashing cost as `status()`. Avoid hot loops.
+</ParamField>
+
+<ParamField body="wiki.runEval({ mode, record? })" type="Promise<EvalReport>">
+  Run the wiki quality eval harness.
+
+  - `mode: "fast"` - health score, citation coverage, corpus stats. **No credentials required.**
+  - `mode: "full"` - adds LLM-judged citation support scoring to the fast results. **Requires LLM credentials.**
+  - `record` - when `true`, appends the result to `.llmwiki/eval/history.jsonl` (default `false`).
+
+  Returns `EvalReport` with `health`, `citationCoverage`, `sourceUtilization`, `citationDepth`, `stats`, regression `delta`, and `thresholdViolations`.
+</ParamField>
+
+### Context and export
+
+<ParamField body="wiki.getContextPack(options)" type="Promise<ContextPack>">
+  Build a v1 context pack - the same JSON envelope as `llmwiki context --json` and the MCP `get_context_pack` tool. Returns primary pages, semantic chunks, graph neighbors, citations, per-page freshness, warnings, and suggested actions.
+
+  - `options.prompt` *(required)* - free-text task or question
+  - `options.budget` - approximate output token budget
+  - `options.depth` - graph traversal depth `0`–`2`
+  - `options.topPages` - max primary pages
+  - `options.topChunks` - max semantic chunks
+
+  Semantic retrieval is opportunistic - when embeddings are not available the pack falls back to lexical ranking with a warning. No credentials required.
+</ParamField>
+
+<ParamField body="wiki.exportJson(options?)" type="Promise<JsonExportDocument>">
+  Export the compiled wiki as a structured JSON document - the same shape as `llmwiki export --target json`. No credentials required.
+
+  **Performance note:** same per-call corpus-hashing cost as `status()` and `lint()`. Avoid hot loops.
+</ParamField>
+
+<ParamField body="wiki.exportOkf(options?)" type="Promise<OkfExportReport>">
+  Export the compiled wiki as an Open Knowledge Format bundle - the same bundle written by `llmwiki export --target okf`. No credentials required.
+
+  - `options.out` - optional output directory. Defaults to `dist/exports/okf` under the wiki root.
+
+  The report includes the output directory, written paths, and warnings such as cited sources that could not be bundled. Imported foreign pages re-export at their original safe bundle paths when possible.
+</ParamField>
+
+<ParamField body="wiki.importOkf(dir, options?)" type="Promise<OkfImportReport>">
+  Import an Open Knowledge Format bundle without calling an LLM. By default, imported pages are staged as review candidates, matching `llmwiki import --okf`.
+
+  - `dir` - path to the OKF bundle directory.
+  - `options.dryRun` - preview pages, skips, and warnings without writing.
+  - `options.trusted` - write live pages directly. Use only for bundles whose content and provenance you already trust.
+
+  The report includes `mode`, imported page details, skipped pages, warnings, and a `nextAction` string when review approval is required.
+</ParamField>
+
+## Error handling
+
+Methods that require an LLM provider throw `ProviderUnavailableError` when no credentials are configured. If the provider name is not recognized, they throw `UnknownProviderError`. Both are exported from the package:
+
+```ts
+import { createWiki, ProviderUnavailableError, UnknownProviderError } from "llm-wiki-compiler";
+
+const wiki = createWiki({ root: "./my-wiki" });
+
+try {
+  await wiki.compile();
+} catch (err) {
+  if (err instanceof ProviderUnavailableError) {
+    console.error("No LLM provider configured - set ANTHROPIC_API_KEY or equivalent.");
+  } else if (err instanceof UnknownProviderError) {
+    console.error("LLMWIKI_PROVIDER is set to an unrecognized value.");
+  } else {
+    throw err;
+  }
+}
+```
+
+## Exported result types
+
+All result types are exported from the package for typed consumption in your own code:
+
+```ts
+import type {
+  CompileResult,
+  IngestResult,
+  QueryResult,
+  WikiStatus,
+  ContextPack,
+  EvalReport,
+  OkfExportReport,
+  OkfImportReport,
+} from "llm-wiki-compiler";
+```
+
+## Performance notes
+
+Several methods hash the full source corpus on every call with no cross-call cache:
+
+- `status()` - O(total source bytes) per call
+- `lint()` - O(total source bytes) per call
+- `exportJson()` - O(total source bytes) per call
+- `exportOkf()` - O(total source bytes) per call
+
+Avoid calling these methods in tight loops or on every request in a server. An mtime-keyed cache is planned for a future release.
+
+`compile()` and `runEval({ mode: "full" })` can run for several minutes on large corpora. There is no progress callback in v1 - the call blocks until the pipeline finishes.
+
+## Next steps
+
+- For agent-driven workflows over MCP, see [MCP Integration](/guides/mcp-agent-integration).

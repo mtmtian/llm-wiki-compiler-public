@@ -1,0 +1,424 @@
+---
+title: "LLM Provider Setup and Configuration Guide for llmwiki"
+sidebarTitle: "Providers"
+description: "Configure llmwiki to use Anthropic, OpenAI-compatible endpoints, Ollama, GitHub Copilot, Atlas Cloud, Claude Agent SDK, or OpenAI Codex CLI."
+---
+
+llmwiki is provider-portable. Whether you have an Anthropic API key, a GitHub Copilot subscription, a locally-running Ollama server, or just a Claude Code login, you can point llmwiki at the right backend with a handful of environment variables - no config files required for most setups. Choose the provider that matches your existing credentials and infrastructure.
+
+## Configuration precedence
+
+When you use the Anthropic provider (the default), llmwiki resolves credentials in this order:
+
+1. Shell environment variables or a `.env` file in your project directory
+2. Claude Code settings fallback - `~/.claude/settings.json` → `env` block
+3. Built-in provider defaults (where applicable)
+
+This means that if you already have Claude Code configured on your machine, you can run `llmwiki compile` without exporting a single variable.
+
+## Providers
+
+<Tabs>
+  <Tab title="Anthropic (Default)">
+
+The Anthropic provider uses the official `@anthropic-ai/sdk` to call Claude directly. It is the default when `LLMWIKI_PROVIDER` is unset.
+
+**Authentication**
+
+Set either `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` - either one satisfies authentication. You do not need both.
+
+| Variable | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | Standard Anthropic API key |
+| `ANTHROPIC_AUTH_TOKEN` | Alternative auth token (accepted by Anthropic-compatible gateways) |
+| `ANTHROPIC_BASE_URL` | Optional - custom endpoint for proxies or alternate Claude gateways |
+
+`ANTHROPIC_BASE_URL` accepts any valid HTTP or HTTPS URL. Claude-style path endpoints such as `https://api.example.com/coding/` are supported; trailing slashes are normalized automatically.
+
+**Example**
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_BASE_URL=https://proxy.example.com  # optional
+llmwiki compile
+```
+
+**Zero-export usage with Claude Code**
+
+If `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_BASE_URL` are not set in your shell or `.env`, llmwiki automatically reads Anthropic-compatible values from the `env` block in `~/.claude/settings.json`. That covers:
+
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_AUTH_TOKEN`
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_MODEL`
+
+If Claude Code is already configured on your machine, this works with no additional setup:
+
+```bash
+llmwiki compile
+```
+
+<Note>
+  The Anthropic provider delegates embeddings to the [Voyage API](https://www.voyageai.com/). Set `VOYAGE_API_KEY` to enable semantic search with `llmwiki query`. Without it, query falls back to lexical ranking. To route embeddings to a different backend instead, set `LLMWIKI_EMBEDDING_PROVIDER` - see [Environment Variables](/configuration/environment-variables).
+</Note>
+
+  </Tab>
+  <Tab title="Claude Agent SDK">
+
+The `claude-agent` provider routes calls through the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript) instead of the raw Messages API. It authenticates using your **local Claude Code login** (OAuth/subscription) - no `ANTHROPIC_API_KEY` is required. If you can run `claude` in your terminal, this provider works.
+
+**Setup**
+
+```bash
+export LLMWIKI_PROVIDER=claude-agent
+export LLMWIKI_MODEL=claude-sonnet-4-6  # optional; this is the default
+llmwiki compile
+```
+
+**Embeddings**
+
+The Claude Agent SDK has no embeddings endpoint. Set `VOYAGE_API_KEY` to enable semantic search in `llmwiki query`; without it, query falls back to lexical ranking. To route embeddings to a different backend instead, set `LLMWIKI_EMBEDDING_PROVIDER` - see [Environment Variables](/configuration/environment-variables).
+
+```bash
+export VOYAGE_API_KEY=pa-...
+```
+
+**Debug tracing**
+
+Use `LLMWIKI_DEBUG` to see what the SDK is doing during a compile:
+
+| Value | Effect |
+|---|---|
+| `1` | Concise one-line trace per SDK message (`[claude-agent] system:init`, `… assistant`, `… result:success`) plus any `claude` subprocess errors |
+| `verbose` | Concise trace **plus** the SDK's full verbose logging |
+
+```bash
+LLMWIKI_DEBUG=1 LLMWIKI_PROVIDER=claude-agent llmwiki compile
+```
+
+<Warning>
+  This provider drives your Claude Code / Agent SDK session programmatically to compile wikis. That is not automatically appropriate for every account type, plan, or environment. Before using it, review Anthropic's current [Claude Code](https://www.anthropic.com/legal/consumer-terms) and [Agent SDK](https://docs.anthropic.com/en/api/agent-sdk/overview) terms and usage policies, and make sure your intended use complies with them.
+</Warning>
+
+  </Tab>
+  <Tab title="OpenAI Codex CLI">
+
+The `codex-agent` provider delegates every completion and structured extraction
+request to the locally installed OpenAI Codex CLI. Authentication belongs
+entirely to Codex, so a ChatGPT subscriber can use an existing `codex login`;
+llmwiki does not require, read, copy, store, or log an OpenAI API key.
+
+**Setup**
+
+```bash
+npm install -g @openai/codex@latest
+codex login
+
+export LLMWIKI_PROVIDER=codex-agent
+export LLMWIKI_EMBEDDING_PROVIDER=ollama
+export OLLAMA_HOST=http://localhost:11434/v1
+llmwiki compile
+
+# Equivalent one-run selection:
+llmwiki compile --provider codex-agent
+```
+
+The `--provider` override is available on `compile`, `refresh`, `query`,
+`watch`, `rules extract`, `eval`, and `quickstart`. If Codex is missing or its
+login is unusable, llmwiki exits nonzero with a Codex-specific remediation;
+there is no fallback to an API-key provider.
+
+llmwiki's minimum verified compatible Codex CLI version is **0.152.1**. Older
+versions may not support the secure non-interactive flags this provider
+requires. If llmwiki reports an incompatible Codex CLI, update with
+`npm install -g @openai/codex@latest` and verify with `codex --version`.
+
+<Warning>
+  When `codex-agent` is selected by `--provider` or a shell-exported
+  `LLMWIKI_PROVIDER`, llmwiki deliberately does not open the project `.env`
+  file because it may contain API keys. Export `LLMWIKI_EMBEDDING_PROVIDER`,
+  `LLMWIKI_MODEL`, and any embedding-backend settings in the shell for that
+  run; do not rely on `.env` for Codex Agent configuration.
+</Warning>
+
+**Execution and option semantics**
+
+- Every request is a new non-interactive `codex exec` process with
+  `--ephemeral`, `--sandbox read-only`, ignored user config/rules, and an empty
+  throwaway working directory that is removed on success and failure.
+- The child receives a minimal environment allowlist for PATH, the local Codex
+  home/login location, temporary-directory selection, locale, and TLS trust.
+  API-key/token variables and unrelated parent variables are never forwarded.
+- A request is terminated after 10 minutes, first with `SIGTERM` and then with
+  `SIGKILL` after a one-second grace period. Retained stderr diagnostics are
+  capped at 1 MiB; stdout is drained without retention because the final message
+  is read from its separately capped 1 MiB file. The provider does not request
+  Codex's unused JSON event stream. Child diagnostics are never echoed in errors,
+  so credential-like output cannot escape into logs. Parent interruption
+  terminates the active Codex process tree and removes its throwaway directory
+  before llmwiki exits.
+- `LLMWIKI_MODEL`, when set, is passed to `codex exec --model`. When it is
+  unset, the Codex CLI chooses its own subscription-available default.
+- The Codex CLI has no `maxTokens` option, so llmwiki's internal `maxTokens`
+  hints cannot be honored by this provider and are not passed. Streaming is
+  buffered by Codex and delivered as one final chunk rather than token-by-token.
+- Structured requests use `--output-schema` and llmwiki independently validates
+  the returned JSON against that schema before the compiler can consume it.
+
+**Embeddings fail closed**
+
+Codex has no embeddings interface. `codex-agent` therefore requires an explicit
+`LLMWIKI_EMBEDDING_PROVIDER` naming an existing embedding backend; it never
+silently falls back to lexical-only behavior. Use `ollama` for a fully keyless
+setup, or configure `openai`, `anthropic`, or `claude-agent` embeddings with
+that backend's existing settings.
+
+  </Tab>
+  <Tab title="OpenAI-Compatible">
+
+Use the `openai` provider for any OpenAI-compatible server, including cloud OpenAI, local `llama-server`, vLLM, and other compatible backends.
+
+**Variables**
+
+| Variable | Required | Description |
+|---|---|---|
+| `LLMWIKI_PROVIDER` | Yes | Set to `openai` |
+| `OPENAI_API_KEY` | Yes | Your API key. For local servers that ignore auth, any dummy value works (e.g. `sk-local`) |
+| `OPENAI_BASE_URL` | For local/custom | Base URL for chat and tool calls. **Include `/v1`** |
+| `LLMWIKI_MODEL` | No | Model name override |
+| `LLMWIKI_EMBEDDING_PROVIDER` | No | Backend serving embeddings, independent of `LLMWIKI_PROVIDER`. One of `anthropic`, `claude-agent`, `openai`, `ollama`, `orcarouter` |
+| `LLMWIKI_EMBEDDING_MODEL` | No | Embedding model override |
+| `OPENAI_EMBEDDINGS_BASE_URL` | No | Separate endpoint for embeddings. When unset, embeddings use the same client and base URL as chat |
+| `OPENAI_EMBEDDINGS_API_KEY` | No | Credential for that separate embeddings endpoint. When unset, the embeddings client reuses `OPENAI_API_KEY` - set this whenever the endpoint belongs to someone else |
+
+**Split endpoint example** (separate servers for generation and embeddings)
+
+```bash
+export LLMWIKI_PROVIDER=openai
+export LLMWIKI_MODEL=qwen3.6-35b
+export LLMWIKI_EMBEDDING_MODEL=text-embedding-model
+export OPENAI_API_KEY=sk-local
+export OPENAI_BASE_URL=http://localhost:8080/v1
+export OPENAI_EMBEDDINGS_BASE_URL=http://localhost:8081/v1
+llmwiki compile
+```
+
+**Request timeout**
+
+The OpenAI SDK defaults to a 10-minute per-request timeout. For slower local models that can take longer to produce a full page, override it:
+
+```bash
+export LLMWIKI_REQUEST_TIMEOUT_MS=1800000  # 30 minutes in ms
+```
+
+See [Environment Variables](/configuration/environment-variables) for full timeout reference.
+
+  </Tab>
+  <Tab title="Ollama">
+
+The `ollama` provider uses Ollama's OpenAI-compatible endpoint for embeddings. All structured tool calls (concept extraction, rule extraction, query page selection, eval judge) use Ollama's native `/api/chat` endpoint with JSON-schema `format`, derived from `OLLAMA_HOST` with the `/v1` suffix removed while preserving any reverse-proxy path prefix. It defaults to a 30-minute per-request timeout (instead of the 10-minute OpenAI default) to accommodate local models on modest hardware.
+
+**Variables**
+
+| Variable | Required | Description |
+|---|---|---|
+| `LLMWIKI_PROVIDER` | Yes | Set to `ollama` |
+| `OLLAMA_HOST` | Yes | Ollama host URL for chat and structured tool calls. **Include `/v1`** — the native `/api/chat` base URL is derived from this value (path prefix preserved) |
+| `LLMWIKI_MODEL` | No | Model name override |
+| `LLMWIKI_EMBEDDING_PROVIDER` | No | Backend serving embeddings, independent of `LLMWIKI_PROVIDER`. One of `anthropic`, `claude-agent`, `openai`, `ollama`, `orcarouter` |
+| `LLMWIKI_EMBEDDING_MODEL` | No | Embedding model override |
+| `OLLAMA_EMBEDDINGS_HOST` | No | Separate Ollama host for embeddings. When unset, embeddings use `OLLAMA_HOST` |
+| `OLLAMA_TIMEOUT_MS` | No | Per-request timeout override for Ollama. Wins over `LLMWIKI_REQUEST_TIMEOUT_MS` when both are set |
+
+**Example** with llama3.1 and nomic-embed-text
+
+```bash
+export LLMWIKI_PROVIDER=ollama
+export LLMWIKI_MODEL=llama3.1
+export LLMWIKI_EMBEDDING_MODEL=nomic-embed-text
+export OLLAMA_HOST=http://localhost:11434/v1
+# Optional: separate host for embeddings
+export OLLAMA_EMBEDDINGS_HOST=http://localhost:11435/v1
+llmwiki compile
+```
+
+<Note>
+  Ollama's default timeout is 30 minutes. If your hardware is especially slow, raise `OLLAMA_TIMEOUT_MS` (e.g. `7200000` for 2 hours).
+</Note>
+
+  </Tab>
+  <Tab title="GitHub Copilot">
+
+The `copilot` provider uses the GitHub Copilot API (`https://api.githubcopilot.com`), which exposes an OpenAI-compatible chat endpoint available to Copilot subscribers.
+
+**Prerequisites**
+
+Classic PATs are not supported. You need a GitHub **OAuth token** with the `copilot` scope. Refresh your `gh` CLI token first:
+
+```bash
+gh auth refresh --scopes copilot
+```
+
+**Setup**
+
+```bash
+export LLMWIKI_PROVIDER=copilot
+export GITHUB_TOKEN=$(gh auth token)   # OAuth token required; PATs will not work
+export LLMWIKI_MODEL=gpt-4o            # optional; gpt-4o is the default
+llmwiki compile
+```
+
+**Available models**
+
+Model names use dots, not dashes. Availability depends on your Copilot plan:
+
+- `gpt-4o` (default)
+- `gpt-4o-mini`
+- `claude-sonnet-4.5`
+- `claude-sonnet-4.6`
+- `claude-opus-4.5`
+- `gemini-2.5-pro`
+
+**Embeddings**
+
+The GitHub Copilot API does not expose an embeddings endpoint. Semantic search (`llmwiki query` with chunked retrieval) falls back to full-index selection without embeddings. To enable it, keep Copilot for chat and route embeddings to another backend with `LLMWIKI_EMBEDDING_PROVIDER` - see [Environment Variables](/configuration/environment-variables):
+
+```bash
+export LLMWIKI_PROVIDER=copilot
+export LLMWIKI_EMBEDDING_PROVIDER=openai
+export OPENAI_EMBEDDINGS_API_KEY=<your-key>
+```
+
+<Warning>
+  `GITHUB_TOKEN` must be a GitHub OAuth token obtained via `gh auth token` after running `gh auth refresh --scopes copilot`. Classic personal access tokens (PATs) are rejected by the Copilot API and will not work.
+</Warning>
+
+  </Tab>
+  <Tab title="OrcaRouter">
+
+The `orcarouter` provider routes calls through [OrcaRouter](https://www.orcarouter.ai), a hosted multi-provider AI gateway that exposes an OpenAI-compatible API. Model names are namespaced by upstream provider (for example `openai/gpt-4o-mini`), and the built-in default model is `openai/gpt-4o-mini`.
+
+The default is a smaller model to keep compilation costs down. For more demanding source material, set `LLMWIKI_MODEL` to a stronger namespaced model that supports tool calls; concept extraction requires structured tool arguments.
+
+For a namespaced reasoning model, automatic request-field detection does not
+strip the provider prefix. If its upstream API requires `max_completion_tokens`,
+set `LLMWIKI_OPENAI_TOKEN_PARAM=max_completion_tokens` explicitly. Set
+`LLMWIKI_OPENAI_REASONING_EFFORT` only to a value supported by that model; the
+unprefixed GPT-5.6 default does not apply to a namespaced id. See
+[OpenAI-compatible request options](/configuration/environment-variables#openai-compatible-request-options).
+
+**Variables**
+
+| Variable | Required | Description |
+|---|---|---|
+| `LLMWIKI_PROVIDER` | Yes | Set to `orcarouter` |
+| `ORCAROUTER_API_KEY` | Yes | Your OrcaRouter API key (`sk-orca-...`) |
+| `LLMWIKI_MODEL` | No | Model name override. OrcaRouter requires a namespaced id such as `openai/gpt-4o-mini` or `anthropic/claude-sonnet-4-6` |
+
+**Setup**
+
+```bash
+export LLMWIKI_PROVIDER=orcarouter
+export ORCAROUTER_API_KEY=sk-orca-...
+llmwiki compile
+```
+
+**Embeddings**
+
+The embeddings integration uses OrcaRouter's documented OpenAI-compatible API
+with the same gateway endpoint and `ORCAROUTER_API_KEY`. Choose an embedding
+model listed in the gateway's catalogue.
+The default embedding model is `openai/text-embedding-3-small`; set
+`LLMWIKI_EMBEDDING_MODEL` to choose another namespaced embedding model.
+OpenAI endpoint and credential overrides do not apply to OrcaRouter.
+
+To use OrcaRouter for embeddings independently of your chat provider:
+
+```bash
+export LLMWIKI_EMBEDDING_PROVIDER=orcarouter
+export ORCAROUTER_API_KEY=<your-key>
+export LLMWIKI_EMBEDDING_MODEL=openai/text-embedding-3-small
+```
+
+Embedding batches default to 64 inputs and are capped at 64 by the client;
+this is a conservative client limit, not a stated gateway maximum.
+Changing the embedding backend or model rebuilds the vector index on the next
+compile. Embedding failures warn and leave lexical retrieval available unless
+you enable `LLMWIKI_EMBED_STRICT`.
+
+  </Tab>
+  <Tab title="Atlas Cloud">
+
+The `atlascloud` provider routes calls through [Atlas Cloud](https://www.atlascloud.ai), a hosted gateway exposing an OpenAI-compatible API across models from several vendors. Model names are namespaced by publisher (for example `qwen/qwen3.5-35b-a3b`).
+
+Namespaced model ids do not receive automatic reasoning-prefix detection. If
+the selected model requires `max_completion_tokens`, set
+`LLMWIKI_OPENAI_TOKEN_PARAM=max_completion_tokens`; configure reasoning effort
+only with a value that model supports. See
+[OpenAI-compatible request options](/configuration/environment-variables#openai-compatible-request-options).
+
+`LLMWIKI_PROVIDER` also accepts `atlas-cloud` and `atlas` as aliases.
+
+**Variables**
+
+| Variable | Required | Description |
+|---|---|---|
+| `LLMWIKI_PROVIDER` | Yes | Set to `atlascloud` (or `atlas-cloud`, `atlas`) |
+| `ATLASCLOUD_API_KEY` | Yes | Your Atlas Cloud API key. `ATLAS_CLOUD_API_KEY` is accepted as an alternative |
+| `LLMWIKI_MODEL` | No | Model override. Must be a namespaced id such as `deepseek-ai/deepseek-v3.2` |
+| `ATLASCLOUD_BASE_URL` | No | Override the API base URL. `ATLAS_CLOUD_BASE_URL` is accepted as an alternative |
+
+**Setup**
+
+```bash
+export LLMWIKI_PROVIDER=atlascloud
+export ATLASCLOUD_API_KEY=<your-key>
+llmwiki compile
+```
+
+**Choosing a model**
+
+`llmwiki compile` extracts concepts through a tool call and requires the model to return tool arguments, so an override must be a model Atlas Cloud lists as supporting tools. The default, `qwen/qwen3.5-35b-a3b`, does. A model without tool support fails on the first extraction request rather than degrading.
+
+**Embeddings**
+
+Atlas Cloud embeddings are not wired up in llmwiki, so the provider fails closed rather than inheriting OpenAI's embedding semantics. To keep Atlas Cloud for chat while using embeddings, route them to another backend with `LLMWIKI_EMBEDDING_PROVIDER` - see [Environment Variables](/configuration/environment-variables):
+
+```bash
+export LLMWIKI_PROVIDER=atlascloud
+export LLMWIKI_EMBEDDING_PROVIDER=openai
+export OPENAI_EMBEDDINGS_API_KEY=<your-key>
+```
+
+  </Tab>
+</Tabs>
+
+## Per-concept prompt budget
+
+When many sources contribute to the same compiled concept, llmwiki enforces a character cap on the combined source content sent to the LLM so no single concept blows past the model's context window. Each contributing source gets a fair share when truncation kicks in.
+
+Set `LLMWIKI_PROMPT_BUDGET_CHARS` to control the cap. The default is `200000` (~50k tokens), which fits modern context windows with headroom. Raise it for larger-context models; lower it for small-context local models.
+
+```bash
+export LLMWIKI_PROMPT_BUDGET_CHARS=100000
+```
+
+A truncation warning prints to stderr when the cap fires, naming the concept that hit the budget.
+
+## Output language
+
+Generated wiki content defaults to whatever language the model produces from the source material - typically English. You can override this two ways:
+
+- `LLMWIKI_OUTPUT_LANG` - applies to every prompt the compile and query pipelines make. For example: `zh-CN`, `Chinese`, `ja`, `Japanese`.
+- `--lang <code>` on `llmwiki compile` or `llmwiki query` - same effect, scoped to one invocation. Wins over the env var.
+
+```bash
+export LLMWIKI_OUTPUT_LANG=zh-CN
+llmwiki compile
+# or per-invocation:
+llmwiki compile --lang Japanese
+```
+
+---
+
+For a complete listing of every environment variable llmwiki reads, see the [Environment Variables reference](/configuration/environment-variables).

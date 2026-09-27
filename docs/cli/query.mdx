@@ -1,0 +1,126 @@
+---
+title: "llmwiki query - Ask Questions Against Your Compiled Wiki"
+sidebarTitle: "Query"
+description: "llmwiki query answers questions using hybrid semantic search and BM25 reranking over compiled wiki pages. Use --save to persist answers as new pages."
+---
+
+Once you've compiled a wiki, `llmwiki query` lets you ask natural language questions and get grounded, cited answers drawn from your compiled pages. Unlike sending a question directly to an LLM, `query` retrieves the most relevant content from your own wiki first and uses that as the grounding context - so answers cite specific pages and trace back to your original sources.
+
+The query pipeline runs in two steps: first it identifies the most relevant pages or chunks for your question using hybrid retrieval, then it generates a grounded answer using only the content those pages contain. If the wiki doesn't have enough information to answer your question, the model says so.
+
+## Basic usage
+
+```bash
+llmwiki query "<question>"
+```
+
+Run from your project root after compiling. The answer streams to the terminal as it's generated.
+
+```bash
+llmwiki query "What is multi-head attention and how does it differ from self-attention?"
+```
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `--save` | Persist the generated answer as a new wiki page in `wiki/queries/`. The page is immediately added to `index.md` and the embedding store so future queries can use this answer as context. |
+| `--lang <code>` | Generate the answer in the specified language (e.g. `zh-CN`, `ja`, `Japanese`). Wins over `LLMWIKI_OUTPUT_LANG`. |
+| `--debug` | Print a retrieval detail snapshot after the answer, showing which pages and chunks were selected, their scores, and whether BM25 reranking changed the order. |
+
+## How retrieval works
+
+`llmwiki query` uses a two-step hybrid retrieval strategy:
+
+1. **Chunk-level semantic search.** The embedding store (`.llmwiki/embeddings.bin`, or `embeddings.json` for small stores) holds vectors for indexed wiki chunks. Your question is embedded and cosine similarity narrows the full corpus down to a top-K set of the most semantically relevant chunks.
+
+2. **BM25 reranking.** The top-K chunks are reranked using BM25 (lexical scoring) to surface chunks where your question's exact terms appear prominently. This corrects for cases where semantic similarity alone would pick conceptually adjacent but not directly relevant content.
+
+The final evidence pack is the full content of the selected pages, loaded and passed to the LLM as grounding context. When no embedding store is present, the command falls back to sending the full `wiki/index.md` to the LLM for page selection.
+
+If you need wikilink-graph expansion - pulling in pages directly referenced by the top results - use [`llmwiki context`](#llmwiki-context-prompt---json) instead. `context` packages an extended evidence pack with graph neighbors and citation metadata, designed for agent pipelines that build their own prompts.
+
+### Example session
+
+```bash
+$ llmwiki query "What is the attention mechanism in transformers?"
+* Selecting relevant pages…
+  i Reasoning: Selected 3 page(s) from 8 reranked chunks: self-attention#2 (0.891), multi-head-attention#0 (0.847), transformer#1 (0.812)
+  * Selected 3 page(s): self-attention, multi-head-attention, transformer
+* Generating answer…
+
+The attention mechanism allows a model to weigh the importance of different
+positions in the input sequence when encoding each token. [[self-attention]]
+describes the core operation: for each token, the model computes query, key,
+and value vectors, then produces a weighted sum of the values where weights
+are determined by the dot-product similarity between queries and keys.
+
+[[multi-head-attention]] extends this by running multiple attention heads in
+parallel, each learning different relationship patterns, and concatenating
+the results.
+
+→ Tip: use --save to add this answer to your wiki
+```
+
+## `llmwiki context "<prompt>" [--json]`
+
+```bash
+llmwiki context "<prompt>"
+llmwiki context "<prompt>" --json
+```
+
+`llmwiki context` and `llmwiki query` both perform hybrid retrieval, but they produce different outputs:
+
+- **`llmwiki context`** packages the evidence - primary pages, semantic chunks, graph neighbors, citations, per-page freshness warnings, and suggested next actions - into a structured evidence pack without generating an answer. The pack is designed to be fed directly to an LLM agent or MCP tool as a token-budgeted context window.
+- **`llmwiki query`** generates a grounded answer using that same retrieved evidence.
+
+Use `llmwiki context` when you want to build your own prompt around the retrieved evidence, or when you're integrating wiki retrieval into an agent pipeline. Use `llmwiki query` when you want a ready-to-read answer.
+
+`--json` emits the same `v1` JSON envelope as the MCP `get_context_pack` tool - stable format suitable for agent consumption.
+
+### `--include-sources`
+
+```bash
+llmwiki context "<prompt>" --include-sources
+```
+
+The `--include-sources` flag is opt-in and appends raw text windows from the ingested source files alongside the compiled wiki page content. Source windows are path-confined to the `sources/` directory - the flag cannot be used to read files outside that boundary. Only enable source windows for agents and pipelines you trust with the full text of your ingested sources.
+
+## Compounding queries with `--save`
+
+When you run `llmwiki query "<question>" --save`, the generated answer is written to `wiki/queries/<slug>.md`, added to `index.md`, and immediately indexed in the embedding store. This means the answer becomes context for future queries:
+
+```bash
+# First query: answer drawn from concept pages only
+llmwiki query "What are the training techniques used for large language models?"
+
+# Save it
+llmwiki query "What are the training techniques used for large language models?" --save
+
+# Future queries can now incorporate this answer as context
+llmwiki query "How does RLHF relate to the training techniques we documented?"
+```
+
+Over time, a wiki that accumulates saved query answers becomes progressively richer - later questions can build on earlier ones, and the evidence pack grows to include synthesized knowledge alongside raw source-derived pages.
+
+### Example with `--debug`
+
+```bash
+$ llmwiki query "How does positional encoding work?" --debug
+
+[answer streams here…]
+
+--- Retrieval debug ---
+  i Source: chunk-level; reranked: yes
+  • positional-encoding (best chunk score 0.923)
+  • transformer (best chunk score 0.741)
+  · positional-encoding#1 score=0.923 :: Positional encodings are added to the input embeddings at the bottom of the encoder and decoder stacks…
+  · positional-encoding#0 score=0.889 :: The model uses sine and cosine functions of different frequencies…
+  · transformer#2 score=0.741 :: The transformer architecture relies on positional information…
+```
+
+<Note>
+`llmwiki query` detects both embedding formats automatically. An existing binary file takes precedence; if it is unavailable, query warns rather than using an older JSON snapshot. If no usable embedding store is present, query falls back to index-based selection. Compile your wiki first to build the embedding store. See [storage and recovery behavior](/configuration/environment-variables#embedding-storage).
+</Note>
+
+For using `query` and `context` via an AI agent, see [MCP Agent Integration](/guides/mcp-agent-integration).

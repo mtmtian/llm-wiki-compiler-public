@@ -1,0 +1,288 @@
+---
+title: "llmwiki compile - Generate Wiki Pages from Sources"
+sidebarTitle: "Compile"
+description: "llmwiki compile runs the incremental two-phase LLM pipeline to extract concepts and generate wiki pages. Key flags: --review and --lang."
+---
+
+Compiling is the step that turns raw source files into a structured, interlinked wiki. When you run `llmwiki compile`, the pipeline runs in two phases: **Phase 1** reads every changed source in `sources/` and asks the LLM to extract all concepts, entities, and topics it finds. **Phase 2** takes those extracted concepts and generates typed wiki pages - one Markdown file per concept, with YAML frontmatter, paragraph-level citations back to source line ranges, and `[[wikilinks]]` connecting related concepts.
+
+Splitting into two phases matters: by completing all extraction before any pages are written, the compiler can merge concepts that appear across multiple sources into a single page, catch extraction failures before anything is committed to disk, and resolve cross-references that would be impossible to wire up in a single pass.
+
+## Basic usage
+
+```bash
+llmwiki compile
+```
+
+Run from your project root. If `sources/` is empty or doesn't exist yet, compile will tell you to run `llmwiki ingest` first.
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `--review` | Write generated pages to `.llmwiki/candidates/` instead of `wiki/`. Pages are held for human review and don't appear in the live wiki until you approve them with `llmwiki review approve <id>`. |
+| `--provider <name>` | Override `LLMWIKI_PROVIDER` for this compile only. Use `codex-agent` to delegate both compile phases to non-interactive `codex exec`. |
+| `--instructions <path>` | Read an explicit UTF-8 instruction file (maximum 64 KiB) and append it to the built-in compile instructions. Changing or omitting the file option regenerates affected pages. |
+| `--lang <code>` | Override the output language for this compile run (e.g. `zh-CN`, `Chinese`, `ja`, `Japanese`). Wins over the `LLMWIKI_OUTPUT_LANG` environment variable. Unset preserves the model's default behaviour. Changing it regenerates already-compiled pages — see [Prompt modifiers and recompilation](#prompt-modifiers-and-recompilation). |
+| `--no-sources-section` | Stop asking the model for a trailing `## Sources` section in generated pages. Provenance is unaffected: the `sources:` frontmatter and the inline `^[file.md:1-5]` citation markers are produced by the compiler and stay exactly as they are. Equivalent to setting `LLMWIKI_SOURCES_SECTION=off`. |
+| `--concurrency <n>` | Maximum LLM calls run in parallel during this compile, across both extraction and page generation. Wins over the `LLMWIKI_COMPILE_CONCURRENCY` environment variable; defaults to `5`. Values above `50` are clamped. |
+| `--verbose` | Print detailed per-step progress: source sizes, concept merge details, page char counts, embedding batch summary, and total compile time. Equivalent to setting `LLMWIKI_VERBOSE=1`. Quiet mode (`--json`) always wins over verbose. |
+
+## Nested source folders
+
+By default, compile reads only top-level `.md` files in `sources/`. To compile
+your existing folder structure directly, add `sources` to `.llmwiki/config.json`:
+
+```json
+{
+  "version": 1,
+  "sources": {
+    "recursive": true,
+    "exclude": ["inbox", "records/drafts", ".trash"]
+  }
+}
+```
+
+Keep any existing `review` or connector settings in the same file. Then run
+`llmwiki compile`. No mirror directory or preprocessing step is needed.
+`sources/records/notes.md` keeps the identity `records/notes.md` in compilation
+state, citations and source previews. It is distinct from `sources/notes.md`.
+Use `/` in source IDs on every platform, including Windows.
+
+Exclusions are literal paths relative to `sources/`, not glob patterns. `inbox`
+excludes that path and its descendants, but not `inbox-old`. Leading `./` and
+trailing `/` are optional. Empty, absolute and parent-traversing paths are
+invalid; malformed settings stop the command rather than silently changing the
+selection. Dot-prefixed files and directories are not automatically ignored:
+exclude `.trash` explicitly if needed. Symlinks are not compiled or followed.
+
+<Warning>
+  Excluding an already-compiled source removes its contribution on the next
+  ordinary compile; it is not a temporary pause. The original source file stays
+  untouched. Pages with no remaining contributors become orphaned, and shared
+  pages are rebuilt from selected contributors. Selecting that source again
+  compiles it as new and can incur model costs. Turning recursion off has the
+  same effect for previously compiled nested files.
+</Warning>
+
+Run an ordinary `llmwiki compile` after changing selection. `refresh --stale`
+does not report unchanged, deselected owners as stale. `llmwiki status --json` lists
+their pending contribution retirement as `deleted`; that status does not mean
+the source file will be removed. The refresh command
+is scoped to stale owners and is not a substitute for applying all selection
+changes. Existing review and retry behavior still applies to generated pages.
+Source listings in the viewer, SDK and MCP use the same selection. An explicit
+re-ingest can still update an existing excluded source by its identity; with
+recursion enabled, moving an ingested file into a nested folder does not create
+a second copy on re-ingest. New ingests are still written at the top level.
+
+## Project instructions
+
+Add editorial guidance without replacing the compiler's built-in instructions:
+
+```bash
+llmwiki compile --instructions ./SOUL.md
+llmwiki compile --review --instructions ./SOUL.md
+```
+
+Use the file for writing style, terminology, concept-selection preferences and
+level of detail. Instructions apply to extraction and page generation. They
+are advisory model guidance, not an enforcement mechanism; built-in citation,
+source-grounding and output requirements remain in the prompt.
+
+The path is relative to your working directory, or absolute. Explicit symlinks
+are allowed. Missing, unreadable, non-regular, invalid UTF-8 or oversized files
+fail before compilation. Empty or whitespace-only files mean no extra policy.
+No instruction file is discovered automatically: `SOUL.md`, `AGENTS.md` and
+`CLAUDE.md` are not read unless you explicitly select one. Neither project
+configuration nor schema files supply this policy.
+
+Pass the option on every compile that should use it. Changing its trimmed text
+or omitting the option regenerates affected pages and replaces obsolete review
+candidates; moving an identical file does not. The existing `promptModifiers`
+records the policy digest, not its text or path. The text is sent to your
+selected model provider, so do not include secrets. SDK callers can supply the
+same policy through [`compile({ systemPolicy })`](/guides/sdk).
+
+`watch`, `quickstart`, `refresh --stale` and the MCP compile tool do not accept
+this option. They compile without the policy; using them after an instructed
+compile can regenerate pages without that guidance. Use the explicit compile
+command above when you need the policy preserved.
+
+## Link repair
+
+After pages are written and interlinks resolved, compile repairs wikilinks whose target does not exist but unambiguously names a page that does. Generation tends to link a concept by its short canonical name (`[[Argo CD]]`) while the page carries a longer descriptive title (`argo-cd-image-update-ownership-model`); the link is repointed to it and the displayed text is left exactly as written.
+
+A link whose slug prefixes two pages, or none, is not touched. Guessing between two candidates would be wrong half the time, and a link to a concept your wiki genuinely lacks is worth keeping — `llmwiki lint` still reports it as `broken-wikilink`, which is how you find the pages your sources justify but extraction never created.
+
+Pending review candidates count toward ambiguity. A pending-only match stays
+unchanged until approval makes its target live; approval retries the repair pass.
+Repair preserves inline code, fenced examples, indented code, and frontmatter.
+It reads only confined wiki pages and warns when an escaping symlink or special
+file is dropped. The pass uses no model calls.
+
+## Incremental behaviour
+
+Compile is hash-based and incremental. Each source file's content is fingerprinted on ingest; on subsequent compiles, only sources whose content hash has changed are re-processed through the LLM. Sources that haven't changed are skipped entirely - no API calls, no rewrites. This means re-running `llmwiki compile` after editing a single source touches only the pages that source contributed to, even in a large wiki.
+
+The same incremental logic applies to embeddings: chunk-level embeddings are updated only for pages whose underlying content changed.
+
+Within a single run, both phases call the LLM in parallel: concept extraction across changed sources and page generation across merged concepts both run under one shared concurrency cap. The default is 5 simultaneous calls. On a cold start or a large refresh, raise it with `--concurrency` or [`LLMWIKI_COMPILE_CONCURRENCY`](/configuration/environment-variables#compile) to cut wall-clock; lower it if your provider rate-limits the run. The same flag is available on `llmwiki refresh`, `llmwiki watch`, and `llmwiki quickstart`.
+
+<Note>
+  Very high concurrency on a first compile can slightly reduce cross-reference quality. Page generation reads a handful of sibling pages for `[[wikilink]]` context, so with many pages generating at once, more are written before their neighbours exist. Page content is never corrupted — only the initial interlinking may be less complete. An ordinary re-compile does not backfill it, because unchanged pages are skipped; to get richer sibling-page context, run at a lower concurrency, or force a recompile of the affected sources (edit them, or remove their entries from `.llmwiki/state.json`). The default of 5 is a safe balance; reserve large values for big batch or CI runs where raw speed matters most.
+</Note>
+
+Compile sends page and chunk embeddings to the provider in batches rather than one request at a time, which cuts compile time on cold starts and large refreshes. The embeddings summary reports how many requests this took, for example `Embeddings: 12/12 pages, 84/84 chunks embedded (3 batched requests)`. Tune the request size with [`LLMWIKI_EMBED_BATCH_SIZE`](/configuration/environment-variables#embeddings), or set [`LLMWIKI_EMBED_STRICT`](/configuration/environment-variables#embeddings) to fail the run when an embedding provider is broken or misconfigured.
+
+<Note>
+  The summary only prints when embeddings actually run. With no embedding backend configured (for example, the default `anthropic` provider without `VOYAGE_API_KEY`), compile prints `Skipped embeddings update` instead and semantic search is not built.
+</Note>
+
+## What compile produces
+
+Small embedding stores use JSON. When the store exceeds 64 MiB, compile saves
+the already-generated vectors to binary storage automatically. You can also
+opt in with `LLMWIKI_BINARY_EMBEDDINGS=true`. Later writes remain binary even
+without the flag. See [storage limits and downgrade guidance](/configuration/environment-variables#embedding-storage).
+
+After a successful compile, your project contains:
+
+```
+wiki/
+  concepts/           one .md file per extracted concept
+  index.md            auto-generated table of contents listing all pages
+.llmwiki/
+  embeddings.json     small-store vectors for semantic search
+  embeddings.bin      vectors after automatic or explicit binary selection
+  state.json          per-source content hashes and compile timestamps
+```
+
+Each page in `wiki/concepts/` has YAML frontmatter with the page title, summary, kind (`concept`, `entity`, `comparison`, or `overview`), contributing source filenames, confidence, and provenance state. Paragraphs carry `^[source.md]` citation markers; specific claims can pin to line ranges like `^[source.md:42-58]`.
+
+### Example compile output
+
+```
+* Extracting concepts from 3 source(s)…
+  ✓ attention-is-all-you-need.md → 8 concept(s)
+  ✓ illustrated-transformer.md → 5 concept(s)
+  ✓ gpt-architecture.md → 6 concept(s)
+* Generating pages for 12 unique concept(s)…
+  + wiki/concepts/self-attention.md [created]
+  + wiki/concepts/multi-head-attention.md [created]
+  ~ wiki/concepts/transformer.md [updated]
+  + wiki/concepts/positional-encoding.md [created]
+  …
+✓ Compiled 11 page(s), skipped 1 (unchanged), updated index.md
+```
+
+## `llmwiki refresh --stale`
+
+If sources have changed since the last compile, affected pages are marked `stale`. Rather than running a full recompile, you can target only those pages:
+
+```bash
+llmwiki refresh --stale
+```
+
+This recompiles only the sources that own stale pages and cleans up pages whose sources were all deleted (orphaned pages). Unrelated new sources that haven't been compiled yet are deliberately skipped - use `llmwiki compile` to bring those in separately.
+
+### `--dry-run`
+
+```bash
+llmwiki refresh --stale --dry-run
+```
+
+Prints the plan - which pages would be recompiled, which sources are involved, how many orphaned pages would be cleaned up - without making any LLM calls or writing any files. Use this to verify the plan before committing.
+
+## `llmwiki watch`
+
+```bash
+llmwiki watch
+```
+
+Watches `sources/` for file changes and automatically triggers a compile whenever a source is added or modified. Useful during active research sessions where you're ingesting and reviewing pages in the same working session.
+
+## Review mode and the review policy
+
+By default, `compile` writes pages directly to `wiki/`. Two mechanisms let you route pages through a review queue instead:
+
+**`--review` flag (all-or-nothing):** All generated pages are written to `.llmwiki/candidates/` as JSON records. Nothing lands in `wiki/` until you explicitly approve each candidate:
+
+```bash
+llmwiki compile --review
+llmwiki review list
+llmwiki review show <id>
+llmwiki review approve <id>
+llmwiki review reject <id>
+```
+
+**Review policy (selective):** Add a `.llmwiki/config.json` to hold only pages that trip specific risk conditions - low confidence, contradictions, schema violations, or broken provenance - while writing the rest live. See [Review Policy](/configuration/review-policy) for the full configuration reference.
+
+<Note>
+`llmwiki compile` sends source content to your configured LLM provider. Make sure your provider credentials are set before running compile. For Anthropic, set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`. For other providers, see the [Providers](/configuration/providers) reference.
+</Note>
+
+<Tip>
+For production wikis, consider running `llmwiki compile --review` to inspect all generated pages before they go live. Once you're confident in your source quality and prompt configuration, you can switch to a targeted review policy that holds only low-confidence or contradicted pages automatically.
+</Tip>
+
+For a deeper look at how the two-phase pipeline works, see [How It Works](/concepts/how-it-works).
+
+## Long sources and output limits
+
+To allow longer completions for concept extraction and page generation:
+
+```bash
+LLMWIKI_MAX_TOKENS=8192 llmwiki compile
+```
+
+The default is 4096 output tokens per call. Choose a limit supported by your
+model; higher limits can increase cost and latency. Invalid settings fail before
+an LLM request, and llmwiki does not automatically increase the budget or retry
+with a larger one. The `claude-agent` and `codex-agent` providers manage their
+own output limits and ignore this setting.
+
+This is not an input-context limit. `LLMWIKI_PROMPT_BUDGET_CHARS` limits combined
+source text during page generation, not the complete source passed to concept
+extraction. For textbooks, split sources into coherent chapters or sections and
+inspect the stored files under `sources/` to check what ingestion retained.
+Extraction asks for 3–8 concepts per source, not an exhaustive textbook index;
+a larger output budget alone does not guarantee more concepts or valid pages.
+
+Changing the output budget does not invalidate successfully compiled sources.
+Failed sources remain retryable; unchanged successful sources are still skipped.
+To regenerate an existing source, edit its content before compiling again.
+
+## Prompt modifiers and recompilation
+
+A **prompt modifier** is a setting that changes what the page prompt asks for
+without changing llmwiki's own prompt wording. Today that is the output
+language, set by `--lang` or `LLMWIKI_OUTPUT_LANG`, and the Sources-section
+preference, set by `--no-sources-section` or `LLMWIKI_SOURCES_SECTION=off`.
+
+The Sources flag only disables the request. To restore the default, omit the
+flag and unset `LLMWIKI_SOURCES_SECTION` (or set it to `on`). Setting or clearing
+this preference regenerates affected pages, including already-compiled pages.
+It changes the instruction sent to the model; it does not strip a heading from
+the response or guarantee that a model will never include one.
+
+Compile is incremental: it normally skips a source whose bytes have not changed.
+A modifier is an input to the page prompt exactly as the source text is, so
+llmwiki records which modifiers each compile ran under and regenerates the
+affected pages when that selection changes:
+
+```bash
+llmwiki compile                    # pages generated in the model's default language
+llmwiki compile --lang Japanese    # the same sources recompile, now in Japanese
+llmwiki compile --lang Japanese    # nothing to do — the selection is unchanged
+```
+
+Because those pages are regenerated by the model, this costs a full compile of
+every affected page. Clearing a modifier invalidates the same pages that setting
+it did.
+
+The instruction-file policy participates in the same change detection through
+its content digest; changing or omitting `--instructions` also invalidates pages.
+
+Each generated page also records the modifiers it was produced under in its
+`promptModifiers` frontmatter, which the JSON export surfaces per page.

@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main, personal/stable]
+  pull_request:
+    branches: [main, personal/stable]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Git ref for release docs and the prior test diagnostic baseline
+        required: true
+        default: origin/personal/stable
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Keep the runtime aligned with package.json's Volta pin.
+  NODE_VERSION: '24.16.0'
+  CI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || inputs.base_ref }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  static-checks:
+    name: Types and release docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Validate comparison commit
+        run: |
+          test -n "$CI_BASE_REF"
+          git rev-parse --verify --end-of-options "${CI_BASE_REF}^{commit}"
+          git merge-base HEAD "$CI_BASE_REF"
+      - run: npx --no-install tsc --noEmit
+      - run: npx --no-install tsc --noEmit -p extensions/knowledge-flow/tsconfig.json
+      - name: Reject new test type errors or increased allowances
+        run: npm run typecheck:tests -- --base-ref "$CI_BASE_REF"
+      - run: npm run release:check-docs
+        env:
+          RELEASE_DOCS_BASE: ${{ env.CI_BASE_REF }}
+
+  build-and-test:
+    name: Tests (${{ matrix.os }}, ${{ matrix.shard }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            shard: 1/2
+          - os: ubuntu-24.04
+            shard: 2/2
+          - os: macos-15
+            shard: 1/1
+    # Windows remains outside the validated platform contract; see README.md.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Build the knowledge-flow runtime
+        run: |
+          node extensions/knowledge-flow/build.mjs "$RUNNER_TEMP/knowledge-flow-runtime"
+          test -s "$RUNNER_TEMP/knowledge-flow-runtime/worker.mjs"
+          test -s "$RUNNER_TEMP/knowledge-flow-runtime/hooks.py"
+      - name: Test CLI, SDK, data safety, and installed CLI package
+        run: npm test -- --shard="${{ matrix.shard }}" --reporter=default --reporter=junit --outputFile.junit=test-results/vitest.xml
+      - name: Test the installed SDK package
+        if: matrix.os == 'ubuntu-24.04' && matrix.shard == '1/2'
+        run: npm run test:pack
+      - name: Keep test results for diagnosis
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tests-${{ matrix.os }}-${{ strategy.job-index }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  knowledge-flow-python:
+    name: Hooks and deployment (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.14'
+      - run: python3 -m unittest discover -s extensions/knowledge-flow -p 'test_*.py'
+      - run: python3 -m unittest discover -s deployment -p 'test_*.py'
+
+  codebase-health:
+    name: Codebase health
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run fallow:ci
+
+  ci-gate:
+    # A manual run can choose its baseline and must not satisfy PR protection.
+    name: ${{ github.event_name == 'workflow_dispatch' && 'CI Gate (manual)' || 'CI Gate' }}
+    if: ${{ always() }}
+    needs: [static-checks, build-and-test, knowledge-flow-python, codebase-health]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Actions run metadata does not preserve the PR's tested base reliably.
+      # Keep this event snapshot in the job steps for scripts/merge-pr.ts.
+      - name: 'PR context #${{ github.event.pull_request.number }} head=${{ github.event.pull_request.head.sha }} base=${{ github.event.pull_request.base.sha }}'
+        if: github.event_name == 'pull_request'
+        run: 'true'
+      - name: Require every mandatory job to succeed
+        id: require-success
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS_JSON" | tee -a "$GITHUB_STEP_SUMMARY"
+          jq -e 'length > 0 and all(.[]; .result == "success")' <<< "$NEEDS_JSON"

@@ -1,0 +1,217 @@
+---
+title: "llmwiki export - Export Your Wiki to Portable Formats"
+sidebarTitle: "Export"
+description: "llmwiki export converts your compiled wiki to llms.txt, JSON, JSON-LD, GraphML, Marp slides, or an Open Knowledge Format bundle."
+---
+
+Your compiled wiki lives on disk as markdown files, but the knowledge inside it is useful beyond the local viewer and CLI. `llmwiki export` transforms your wiki into portable formats - a compact llms.txt file that fits in an LLM context window, a structured JSON envelope for programmatic consumers, a JSON-LD graph for semantic tooling, a GraphML file for graph visualization, a Marp slide deck for presentations, or an Open Knowledge Format bundle for exchange with other knowledge tools.
+
+Export is a pure transformation of existing wiki content. It makes no LLM calls and doesn't modify any files in `wiki/` or `sources/` - only writing artifacts under `dist/exports/` or the `--out` directory you choose for directory-style targets.
+
+---
+
+## Syntax
+
+```bash
+llmwiki export                                # export default single-file formats
+llmwiki export --target <name>                # export one format
+llmwiki export --target json --project-id <id>  # export JSON with a stable bridge ID
+llmwiki export --target okf --out ./okf-bundle  # export an Open Knowledge Format bundle
+```
+
+When you omit `--target`, the single-file formats are exported in one pass. The `okf` target is opt-in because it writes a directory bundle.
+
+---
+
+## Export targets
+
+| Target | Flag value | Output file | What it produces |
+|--------|-----------|-------------|-----------------|
+| llms.txt | `llms-txt` | `dist/exports/llms.txt` | Concise index per the [llmstxt.org](https://llmstxt.org) spec - page titles, summaries, and links. Compact enough to paste into an LLM context window. |
+| llms-full.txt | `llms-full-txt` | `dist/exports/llms-full.txt` | Full content version of llms.txt - every page's complete body included. Larger but self-contained. |
+| JSON | `json` | `dist/exports/wiki.json` | Structured JSON envelope with per-page metadata (kind, confidence, provenance, citations, aliases, freshness). See [JSON export structure](#json-export-structure) below. |
+| JSON-LD | `json-ld` | `dist/exports/wiki.jsonld` | Schema.org JSON-LD graph for semantic web and knowledge graph tooling. |
+| GraphML | `graphml` | `dist/exports/wiki.graphml` | Directed wikilink graph as XML. Import into [Gephi](https://gephi.org), Cytoscape, or any GraphML-compatible tool. |
+| Marp | `marp` | `dist/exports/wiki.md` | [Marp](https://marp.app) presentation slide deck - one slide per concept page. |
+| Open Knowledge Format | `okf` | `dist/exports/okf/` | Directory bundle with `index.md`, per-page OKF docs, copied references, and `log.md`. Use this when another tool expects OKF-style markdown bundles. |
+
+### Examples
+
+```bash
+# Export just the llms.txt format
+llmwiki export --target llms-txt
+
+# Export the full-content version
+llmwiki export --target llms-full-txt
+
+# Export structured JSON
+llmwiki export --target json
+
+# Export JSON-LD for a knowledge graph pipeline
+llmwiki export --target json-ld
+
+# Export a GraphML graph for Gephi
+llmwiki export --target graphml
+
+# Export Marp slides (concept pages only)
+llmwiki export --target marp --source concepts
+
+# Export an Open Knowledge Format bundle
+llmwiki export --target okf
+
+# Export OKF to a specific directory
+llmwiki export --target okf --out ./dist/okf-for-partner
+
+# Export all default single-file formats at once
+llmwiki export
+```
+
+---
+
+## `--project-id <id>`
+
+The `--project-id` flag embeds a stable identifier in the JSON export envelope. Downstream importers use this ID to derive deterministic external IDs for each page - so if you re-export and re-import, pages map to the same records rather than creating duplicates.
+
+```bash
+llmwiki export --target json --project-id my-research-wiki
+```
+
+Valid project IDs match the pattern `/^[a-z0-9][a-z0-9-]{0,62}$/` - lowercase letters, digits, and hyphens, starting with a letter or digit, up to 63 characters. The export is aborted before writing any files if the ID is invalid.
+
+<Note>
+  If you're using the [Atomic Memory bridge](/guides/atomic-memory-bridge), always pass the same `--project-id` value on every export. The bridge derives stable memory record IDs from the project ID and page path - changing the ID will create duplicate records on re-import.
+</Note>
+
+---
+
+## JSON export structure
+
+The `json` target produces a `wiki.json` file with a top-level envelope and an array of page objects:
+
+```json
+{
+  "version": 1,
+  "projectId": "my-research-wiki",
+  "exportedAt": "2026-06-05T09:14:02Z",
+  "pages": [
+    {
+      "path": "concepts/knowledge-compilation.md",
+      "slug": "knowledge-compilation",
+      "title": "Knowledge Compilation",
+      "kind": "concept",
+      "summary": "Techniques for converting knowledge representations into efficient forms.",
+      "confidence": 0.82,
+      "provenanceState": "merged",
+      "contradictedBy": [],
+      "citations": [
+        { "source": "knowledge-compilation.md", "lines": [42, 58] }
+      ],
+      "aliases": ["knowledge compiler", "compilation"],
+      "freshness": "fresh",
+      "body": "..."
+    }
+  ]
+}
+```
+
+### Per-page fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Relative path within the wiki (`concepts/` or `queries/`) |
+| `slug` | string | URL-safe page identifier |
+| `title` | string | Page title from frontmatter |
+| `kind` | string | Page kind: `concept`, `entity`, `comparison`, or `overview` |
+| `summary` | string | One-line summary from frontmatter |
+| `confidence` | number \| null | LLM-reported confidence in the synthesized page (0–1) |
+| `provenanceState` | string | `extracted`, `merged`, `inferred`, or `ambiguous` |
+| `contradictedBy` | array | Slugs of pages that contradict this one |
+| `citations` | array | Flattened list of `{ source, lines? }` citations from the page body |
+| `aliases` | array | Alternate names declared in frontmatter |
+| `freshness` | string | `fresh`, `stale`, or `orphaned` based on source state |
+| `createdAt` | string | Creation timestamp from frontmatter; omitted when the page declares none |
+| `updatedAt` | string | Last-updated timestamp, falling back to `createdAt`; omitted when the page declares neither |
+| `body` | string | Full page body (markdown) |
+
+<Tip>
+  The `freshness` field lets downstream consumers filter out stale or orphaned pages before using the content. A page is `stale` when its sources have changed since the last compile; `orphaned` when all its sources have been deleted.
+</Tip>
+
+<Note>
+  Timestamps are read from the page, never from the export run. A page that declares neither `createdAt` nor `updatedAt` — every page written by `llmwiki query --save` declares only the former — exports **no** timestamp rather than an empty one: JSON and JSON-LD omit the keys, GraphML omits the `<data>` elements, and llms.txt, llms-full.txt and Marp omit the `created:`/`updated:` clauses. Two exports of an unchanged wiki are therefore byte-identical.
+</Note>
+
+---
+
+## Marp source filter
+
+When exporting Marp slides, you can narrow the deck to a specific page directory with `--source`:
+
+```bash
+llmwiki export --target marp --source concepts  # only concept pages
+llmwiki export --target marp --source queries   # only saved query answers
+llmwiki export --target marp                    # all pages (default)
+```
+
+When `--source` narrows the deck, the export summary reports the filtered page count rather than the total wiki size.
+
+---
+
+## Open Knowledge Format export
+
+The `okf` target writes a directory bundle instead of a single file:
+
+```bash
+llmwiki export --target okf
+```
+
+By default, the bundle is written to `dist/exports/okf/`. Use `--out <dir>` to choose another directory:
+
+```bash
+llmwiki export --target okf --out ./partner-bundle
+```
+
+The bundle layout is:
+
+```text
+dist/exports/okf/
+  index.md
+  concepts/<slug>.md
+  queries/<slug>.md
+  <foreign/path>.md
+  references/<source-file>.md
+  log.md
+```
+
+- `index.md` is the bundle table of contents and carries `okf_version: "0.1"` in frontmatter.
+- Native llmwiki pages export under `concepts/` and `queries/`.
+- Imported foreign pages re-export at their original bundle-relative `.md` path when that path is safe, URL-safe, non-reserved, and uncontested. Unsafe or colliding paths fall back to the native slug path with a warning.
+- `references/` contains cited source files that still exist under `sources/` and resolve inside that directory. Missing or unsafe references are listed as plain text in citations instead of becoming dangling links.
+- `log.md` translates llmwiki's activity journal into an OKF-style date-grouped log.
+
+Each page document includes standard OKF fields (`type`, `title`, `description`, `tags`, `timestamp`) plus an `x-llmwiki` block with compiler metadata such as source files, citations, freshness, provenance, and a canonical content hash. Imported foreign OKF pages preserve their foreign `type` and producer-specific keys on re-export while refreshing the current llmwiki metadata.
+
+`type` is the page's `kind` when it declares one, `query` for pages under `wiki/queries/`, and `concept` otherwise. `timestamp` is the page's `updatedAt`, falling back to its `createdAt`; a page that declares neither exports no `timestamp` at all rather than the time the export ran.
+
+<Note>
+  `export --target okf` refuses dangerous output targets such as the filesystem root, the project root, directories inside `.git`, and non-empty directories that are not already OKF bundles. Re-exporting into an existing OKF bundle clears stale bundle files before writing the new bundle.
+</Note>
+
+See [Open Knowledge Format guide](/guides/open-knowledge-format) for the import/export round-trip workflow.
+
+---
+
+## Exporting for the Atomic Memory bridge
+
+The JSON export format is the on-ramp to [Atomic Memory](/guides/atomic-memory-bridge). The `@atomicmemory/llmwiki` bridge imports the `wiki.json` envelope as one Atomic Memory record per wiki page, preserving all advisory metadata under `memory.metadata.llmwiki.*`.
+
+```bash
+# 1. Compile and export
+llmwiki compile
+llmwiki export --target json --project-id my-research-wiki
+
+# 2. Import into Atomic Memory (using the bridge package)
+npx @atomicmemory/llmwiki import dist/exports/wiki.json
+```
+
+See the [Atomic Memory bridge guide](/guides/atomic-memory-bridge) for the full compile → export → import → package workflow.

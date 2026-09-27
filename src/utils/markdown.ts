@@ -1,0 +1,389 @@
+/**
+ * Markdown parsing and manipulation helpers.
+ * Handles YAML frontmatter extraction, slugification, citation parsing, and
+ * compatibility exports for wiki page utilities.
+ */
+
+import { readFile } from "fs/promises";
+import yaml from "js-yaml";
+import type {
+  ClaimCitation,
+  ContradictionRef,
+  ProvenanceMetadata,
+  ProvenanceState,
+  SourceSpan,
+} from "./types.js";
+export { atomicWrite } from "./atomic-write.js";
+
+/** Regex matching `^[...]` citation markers (paragraph or claim-level). */
+const CITATION_MARKER_PATTERN = /\^\[([^\]]+)\]/g;
+
+/**
+ * Regex matching the optional `:start-end` or `#Lstart-Lend` span suffix on a
+ * citation entry. Only single spans reach this pattern; comma-separated lists
+ * are matched by {@link COLON_MULTILINE_PATTERN}, which every caller tries
+ * first. The colon separator is therefore a hyphen alone — admitting a comma
+ * here would let `81,90` be read as the range `81-90`.
+ */
+const SPAN_SUFFIX_PATTERN = /^(?<file>[^:#]+)(?:(?::(?<colonStart>\d+)(?:-\s*(?<colonEnd>\d+))?)|(?:#L(?<hashStart>\d+)(?:-L(?<hashEnd>\d+))?))?$/;
+
+/**
+ * Regex matching a colon-form entry with two or more comma-separated line tokens,
+ * where each token is a single number or a hyphen range. This matches formats the
+ * compile-time normalizer emits (`source.md:1, 12`, `source.md:3,7,42`,
+ * `source.md:1-5, 12`). Captured `lines` is the raw token string; each token
+ * expands into its own SourceSpan.
+ *
+ * Whitespace is allowed on BOTH sides of each comma because the normalizer's
+ * bare-line pattern accepts it, so `^[81 , 90]` is repaired to
+ * `^[source.md:81 , 90]` — a form this pattern has to admit or the normalizer
+ * would emit citations its own validator rejects.
+ */
+const COLON_MULTILINE_PATTERN = /^(?<file>[^:#]+):(?<lines>\d+(?:-\d+)?(?:\s*,\s*\d+(?:-\d+)?)+)$/;
+
+/** The minimum valid line number in a source span (lines are 1-indexed). */
+const MIN_LINE_NUMBER = 1;
+
+/** The set of valid provenance state strings, used to reject unknown values. */
+const VALID_PROVENANCE_STATES: ReadonlySet<ProvenanceState> = new Set([
+  "extracted",
+  "merged",
+  "inferred",
+  "ambiguous",
+  "imported",
+]);
+
+/**
+ * Convert a human-readable concept title to a filename slug.
+ *
+ * Unicode-aware: keeps letters and numbers from any script (Latin, CJK,
+ * Cyrillic, Greek, Arabic, etc.). Strips punctuation, emoji, and other
+ * symbols. The previous implementation used `\w` without the `u` flag,
+ * which only matches `[A-Za-z0-9_]` — that silently dropped CJK titles
+ * to the empty string and caused the bug fixed in #35.
+ *
+ * Returns an empty string when the title contains no letters or numbers
+ * at all (callers that write files should detect this and fail loudly
+ * instead of writing a dotfile).
+ */
+export function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/['']/g, "")
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+
+const PROSE_LEAD_RE = /^\p{L}/u;
+
+/**
+ * Split a markdown body into prose paragraphs for eval metrics.
+ * Headings, code blocks, list items, and blank lines are excluded
+ * so that only human-readable claim text is counted. Used by
+ * citation-coverage, citation-support, source-utilization, and
+ * citation-depth so they agree on what counts as prose.
+ */
+export function splitProseParagraphs(body: string): string[] {
+  return body.split(/\n\s*\n/).filter((p) => PROSE_LEAD_RE.test(p.trim()));
+}
+
+
+/** Build YAML frontmatter string from key-value pairs. */
+export function buildFrontmatter(fields: Record<string, unknown>): string {
+  const dumped = yaml.dump(fields, { lineWidth: -1, quotingType: '"' }).trimEnd();
+  return `---\n${dumped}\n---`;
+}
+
+/** Parse YAML frontmatter from a markdown string. Returns { meta, body }. */
+export function parseFrontmatter(content: string): {
+  meta: Record<string, unknown>;
+  body: string;
+} {
+  const { meta, body } = parseFrontmatterStatus(content);
+  return { meta, body };
+}
+
+/**
+ * Like `parseFrontmatter` but also reports whether a frontmatter block was
+ * present and whether the YAML inside it parsed cleanly. Callers that need
+ * to distinguish "no frontmatter block" from "malformed YAML" (e.g. the
+ * viewer collector, which surfaces these as different warnings) use this
+ * variant; the plain `parseFrontmatter` stays a thin wrapper so existing
+ * callers are unaffected.
+ */
+export function parseFrontmatterStatus(content: string): {
+  meta: Record<string, unknown>;
+  body: string;
+  hasFrontmatterBlock: boolean;
+  malformedFrontmatter: boolean;
+} {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!match) {
+    return { meta: {}, body: content, hasFrontmatterBlock: false, malformedFrontmatter: false };
+  }
+
+  let meta: Record<string, unknown> = {};
+  let malformedFrontmatter = false;
+  try {
+    const parsed = yaml.load(match[1]);
+    if (parsed && typeof parsed === "object") {
+      meta = parsed as Record<string, unknown>;
+    } else if (parsed !== null && parsed !== undefined) {
+      // YAML parsed to a scalar/array — frontmatter must be a mapping.
+      malformedFrontmatter = true;
+    }
+  } catch {
+    malformedFrontmatter = true;
+  }
+  return { meta, body: match[2], hasFrontmatterBlock: true, malformedFrontmatter };
+}
+
+/**
+ * Extract all source filenames from ^[filename.md] citation markers in a page body.
+ * Handles paragraph form (`^[source.md]`), multi-source (`^[a.md, b.md]`), and the
+ * claim-level extension that pins a line range (`^[source.md:42-58]` or
+ * `^[source.md#L42-L58]`). Only the filename component is returned — span data is
+ * discarded so existing callers continue to receive a flat filename list.
+ * @param body - The markdown body text to parse.
+ * @returns Array of unique source filenames.
+ */
+export function extractCitations(body: string): string[] {
+  const filenames = new Set<string>();
+  for (const citation of extractClaimCitations(body)) {
+    for (const span of citation.spans) {
+      if (span.file.length > 0) filenames.add(span.file);
+    }
+  }
+  return [...filenames];
+}
+
+/**
+ * Extract claim-level citations from a markdown body. Each `^[...]` marker
+ * becomes one `ClaimCitation`; comma-separated entries inside a single marker
+ * become multiple spans on that citation. Entries that fail to parse against
+ * the span grammar are returned as bare-file spans so callers can still tell
+ * the marker was present (the linter inspects `raw` to flag malformed forms).
+ * @param body - The markdown body text to parse.
+ * @returns Array of ClaimCitation objects in document order.
+ */
+export function extractClaimCitations(body: string): ClaimCitation[] {
+  const citations: ClaimCitation[] = [];
+  let match: RegExpExecArray | null;
+  CITATION_MARKER_PATTERN.lastIndex = 0;
+  while ((match = CITATION_MARKER_PATTERN.exec(body)) !== null) {
+    const raw = match[1];
+    const spans = parseCitationEntries(raw);
+    if (spans.length > 0) citations.push({ raw, spans });
+  }
+  return citations;
+}
+
+/**
+ * Split a raw citation marker interior (the content between `^[` and `]`) into
+ * individual source-entry strings, without separating comma-separated line
+ * numbers like the `12` in `source.md:1, 12`.
+ *
+ * The rule: split on every comma EXCEPT those followed by a line-number token
+ * (`12` or `12-15`). This correctly handles digit-leading filenames such as
+ * `2024-notes.md`, `99problems.md`, and `1.md`.
+ */
+export function splitCitationMarker(inner: string): string[] {
+  return inner.split(/,(?!\s*\d+(?:-\d+)?\s*(?:,|$))/);
+}
+
+/**
+ * Parse the inside of `^[...]` into one or more SourceSpan entries.
+ * Delegates splitting to {@link splitCitationMarker} so `source.md:1, 12`
+ * stays as one entry while digit-leading filenames like `2024-notes.md` are
+ * correctly recognised as separate entries.
+ */
+function parseCitationEntries(inner: string): SourceSpan[] {
+  const spans: SourceSpan[] = [];
+  for (const part of splitCitationMarker(inner)) {
+    const trimmed = part.trim();
+    if (trimmed.length === 0) continue;
+    spans.push(...parseSpanEntries(trimmed));
+  }
+  return spans;
+}
+
+/**
+ * Parse a single trimmed citation entry into SourceSpans: one per line range,
+ * or a single file-only span for paragraph-form citations. Returns an empty
+ * array when the span syntax or range semantics are invalid.
+ */
+function parseSpanEntries(entry: string): SourceSpan[] {
+  const match = COLON_MULTILINE_PATTERN.exec(entry) ?? SPAN_SUFFIX_PATTERN.exec(entry);
+  // Unparseable entries, such as malformed spans like file.md:abc, are preserved as file-only spans so the malformed-citation linter can report them.
+  if (!match?.groups) return [{ file: entry }];
+  const file = match.groups.file;
+  const ranges = parseCitationLineRanges(entry);
+  if (ranges === null) return [];
+  return ranges.length > 0 ? ranges.map((lines) => ({ file, lines })) : [{ file }];
+}
+
+/** Parse a single line token (`12` or `1-5`) into a start/end pair. */
+function parseLineToken(token: string): { start: number; end: number } {
+  const [startStr, endStr] = token.split("-");
+  const start = Number(startStr.trim());
+  const end = endStr === undefined ? start : Number(endStr.trim());
+  return { start, end };
+}
+
+/** Parse comma-separated line tokens, returning null if any token is invalid. */
+function parseLineTokens(linesStr: string): Array<{ start: number; end: number }> | null {
+  const ranges = linesStr.split(/\s*,\s*/).map(parseLineToken);
+  return ranges.every(({ start, end }) => isValidLineRange(start, end)) ? ranges : null;
+}
+
+/**
+ * Parse every line range from a citation entry. Returns an empty array for
+ * paragraph-form citations, or null when span syntax/range semantics are invalid.
+ */
+export function parseCitationLineRanges(entry: string): Array<{ start: number; end: number }> | null {
+  const trimmed = entry.trim();
+  const multi = COLON_MULTILINE_PATTERN.exec(trimmed);
+  if (multi?.groups) return parseLineTokens(multi.groups.lines);
+  const match = SPAN_SUFFIX_PATTERN.exec(trimmed);
+  if (!match?.groups) return null;
+  const { colonStart, colonEnd, hashStart, hashEnd } = match.groups;
+  const start = colonStart ?? hashStart;
+  const end = colonEnd ?? hashEnd;
+  if (start === undefined) return [];
+  return parseLineTokens(end === undefined ? start : `${start}-${end}`);
+}
+
+/** Returns true when both lines are >= 1 and end is not before start. */
+function isValidLineRange(start: number, end: number): boolean {
+  return start >= MIN_LINE_NUMBER && end >= start;
+}
+
+/**
+ * Detect whether a citation entry is malformed: bracket text that contains
+ * `:` or `#` characters but does not match the documented span grammar, or
+ * contains a semantically invalid line range (line 0 or end before start).
+ * Used by the linter to flag broken claim-level provenance markers.
+ */
+export function isMalformedCitationEntry(entry: string): boolean {
+  const trimmed = entry.trim();
+  if (trimmed.length === 0) return true;
+  if (!trimmed.includes(":") && !trimmed.includes("#")) return false;
+  return parseCitationLineRanges(trimmed) === null;
+}
+
+/**
+ * Inspect provenance for a page body, grouping every parsed span by source file.
+ * Useful for tooling that wants to render a "this page draws from" panel without
+ * worrying about how the markers were formatted in source. Each filename maps to
+ * a deduplicated list of `{start, end}` line ranges (paragraph-only citations
+ * appear as the empty array, signalling "no specific span").
+ */
+export function inspectProvenance(body: string): Map<string, Array<{ start: number; end: number }>> {
+  const grouped = new Map<string, Array<{ start: number; end: number }>>();
+  for (const citation of extractClaimCitations(body)) {
+    for (const span of citation.spans) {
+      const ranges = grouped.get(span.file) ?? [];
+      if (span.lines && !rangeAlreadyTracked(ranges, span.lines)) {
+        ranges.push(span.lines);
+      }
+      grouped.set(span.file, ranges);
+    }
+  }
+  return grouped;
+}
+
+/** Has this start/end pair already been recorded for a file? */
+function rangeAlreadyTracked(
+  ranges: Array<{ start: number; end: number }>,
+  candidate: { start: number; end: number },
+): boolean {
+  return ranges.some((r) => r.start === candidate.start && r.end === candidate.end);
+}
+
+/** Read a file, returning empty string if it doesn't exist. */
+export async function safeReadFile(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+/** Parse a numeric confidence value, clamping to 0..1 and rejecting non-numbers. */
+function parseConfidence(raw: unknown): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  if (raw < 0) return 0;
+  if (raw > 1) return 1;
+  return raw;
+}
+
+/** Parse a provenance state string, returning undefined for unknown values. */
+function parseProvenanceState(raw: unknown): ProvenanceState | undefined {
+  if (typeof raw !== "string") return undefined;
+  return VALID_PROVENANCE_STATES.has(raw as ProvenanceState)
+    ? (raw as ProvenanceState)
+    : undefined;
+}
+
+/** Coerce a single contradiction entry to a ContradictionRef, or null if invalid. */
+function coerceContradictionEntry(entry: unknown): ContradictionRef | null {
+  if (typeof entry === "string" && entry.trim().length > 0) {
+    return { slug: entry.trim() };
+  }
+  if (entry && typeof entry === "object" && "slug" in entry) {
+    const obj = entry as { slug: unknown; reason?: unknown };
+    if (typeof obj.slug !== "string" || obj.slug.trim().length === 0) return null;
+    const ref: ContradictionRef = { slug: obj.slug.trim() };
+    if (typeof obj.reason === "string") ref.reason = obj.reason;
+    return ref;
+  }
+  return null;
+}
+
+/** Parse a contradictedBy array, accepting strings or objects with slug. */
+function parseContradictedBy(raw: unknown): ContradictionRef[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const refs = raw
+    .map(coerceContradictionEntry)
+    .filter((ref): ref is ContradictionRef => ref !== null);
+  return refs.length > 0 ? refs : undefined;
+}
+
+/**
+ * Extract provenance metadata fields from a parsed frontmatter record.
+ * Defensively handles missing or malformed values so existing pages without
+ * the new fields continue to parse correctly.
+ *
+ * Note: legacy pages may also carry an `inferredParagraphs` frontmatter
+ * field from earlier compiles. It is intentionally not parsed here —
+ * the lint rule derives the count from the rendered body instead, so
+ * the cached field is ignored.
+ * @param meta - Raw frontmatter object as returned by parseFrontmatter.
+ * @returns Typed provenance metadata with only the fields that were present.
+ */
+export function parseProvenanceMetadata(
+  meta: Record<string, unknown>,
+): ProvenanceMetadata {
+  return {
+    confidence: parseConfidence(meta.confidence),
+    provenanceState: parseProvenanceState(meta.provenanceState),
+    contradictedBy: parseContradictedBy(meta.contradictedBy),
+  };
+}
+
+/**
+ * Validate that a wiki page has non-empty content and valid frontmatter.
+ * Returns true if the page is valid.
+ */
+export function validateWikiPage(content: string): boolean {
+  if (!content || content.trim().length === 0) return false;
+
+  const { meta, body } = parseFrontmatter(content);
+  if (!meta.title) return false;
+  if (body.trim().length === 0) return false;
+
+  return true;
+}

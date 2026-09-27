@@ -1,0 +1,405 @@
+/**
+ * MCP tool registrations for llmwiki.
+ *
+ * Each tool wraps an existing pipeline function (ingest, compile, query,
+ * search, read, lint, status, context-pack, eval) and converts its structured result into
+ * an MCP CallToolResult. Tools that need an LLM provider validate the
+ * provider lazily — the server itself starts without credentials so
+ * read-only tools always work.
+ */
+
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ingestSource } from "../commands/ingest.js";
+import { compileAndReport } from "../compiler/index.js";
+import { generateAnswer } from "../commands/query.js";
+import { lint } from "../linter/index.js";
+import { collectStatus } from "../status/collect.js";
+import { buildContextPack } from "../context/build.js";
+import { ensureProviderAvailable } from "../utils/provider-guard.js";
+import { runEval, DEFAULT_SAMPLE_SIZE } from "../eval/index.js";
+import { readPageRecord } from "../pages/read.js";
+import { pickSearchRefs, loadSelectedRefs } from "../search/retrieval.js";
+import { loadNonDefaultProfile } from "../profile/block.js";
+import { isSlugSafe } from "../profile/identity.js";
+import { resolveArtifactRef, declaresArtifactTypes } from "../artifacts/resolve.js";
+import type { ArtifactRef } from "../artifacts/ref.js";
+import { jsonResult, errorResult } from "./result.js";
+import { registerProjectContextTools } from "./project-context-tools.js";
+
+/** Register wiki tools on the given MCP server instance. */
+export function registerWikiTools(server: McpServer, root: string): void {
+  registerIngestTool(server, root);
+  registerCompileTool(server, root);
+  registerQueryTool(server, root);
+  registerSearchTool(server, root);
+  registerReadTool(server, root);
+  registerLintTool(server, root);
+  registerStatusTool(server, root);
+  registerContextPackTool(server, root);
+  registerProjectContextTools(server, root);
+  registerEvalTool(server, root);
+  registerVerifyArtifactTool(server, root);
+}
+
+function registerIngestTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "ingest_source",
+    {
+      title: "Ingest Source",
+      description:
+        "Fetch a URL or copy a local file into sources/. Returns the saved filename, " +
+        "character count, and whether content was truncated to fit the size limit.",
+      inputSchema: {
+        source: z
+          .string()
+          .describe("URL (http/https) or absolute path to a .md/.txt file"),
+      },
+    },
+    async ({ source }) => {
+      const result = await ingestSource(root, source);
+      return jsonResult(result);
+    },
+  );
+}
+
+function registerCompileTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "compile_wiki",
+    {
+      title: "Compile Wiki",
+      description:
+        "Run the incremental compile pipeline: extract concepts from new/changed " +
+        "sources, generate wiki pages, resolve interlinks, and rebuild the index. " +
+        "Requires an LLM provider with credentials.",
+      inputSchema: {},
+    },
+    async () => {
+      ensureProviderAvailable();
+      const result = await compileAndReport(root);
+      return jsonResult(result);
+    },
+  );
+}
+
+function registerQueryTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "query_wiki",
+    {
+      title: "Query Wiki",
+      description:
+        "Ask a natural-language question. Selects relevant pages with the LLM, " +
+        "loads them, and returns a grounded answer with citations. Set save=true " +
+        "to persist the answer as a wiki page. Set debug=true to include the " +
+        "selected chunks and their scores. Requires an LLM provider.",
+      inputSchema: {
+        question: z.string().describe("The natural-language question to answer."),
+        save: z
+          .boolean()
+          .optional()
+          .describe("Persist the answer as a wiki/queries/ page when true."),
+        debug: z
+          .boolean()
+          .optional()
+          .describe("Include retrieval debug info (selected chunks/pages + scores)."),
+      },
+    },
+    async ({ question, save, debug }) => {
+      ensureProviderAvailable();
+      const result = await generateAnswer(root, question, { save, debug });
+      return jsonResult(result);
+    },
+  );
+}
+
+function registerSearchTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "search_pages",
+    {
+      title: "Search Pages",
+      description:
+        "Select pages relevant to a question and return their full content. " +
+        "Uses semantic embeddings when available, falling back to LLM-based " +
+        "selection over the wiki index. Requires an LLM provider.",
+      inputSchema: {
+        question: z.string().describe("The query used to rank pages."),
+      },
+    },
+    async ({ question }) => {
+      ensureProviderAvailable();
+      const { refs, warnings } = await pickSearchRefs(root, question);
+      const records = await loadSelectedRefs(root, refs);
+      // S6: surface degrade warnings in the RESULT payload (not a log) so an
+      // agent SEES that an outdated index meant lexical-only contribution.
+      return jsonResult({ pages: records, refs, warnings });
+    },
+  );
+}
+
+function registerReadTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "read_page",
+    {
+      title: "Read Page",
+      description:
+        "Read a single wiki page by slug. Searches concepts/ first, then queries/. " +
+        "Returns the parsed frontmatter and body. No LLM call required.",
+      inputSchema: {
+        slug: z.string().describe("Page slug, without .md extension."),
+      },
+    },
+    async ({ slug }) => {
+      const page = await readPageRecord(root, slug);
+      if (!page) {
+        throw new Error(`Page not found: ${slug}`);
+      }
+      return jsonResult(page);
+    },
+  );
+}
+
+function registerLintTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "lint_wiki",
+    {
+      title: "Lint Wiki",
+      description:
+        "Run rule-based quality checks (broken wikilinks, orphans, duplicates, " +
+        "empty pages, broken citations). Returns structured diagnostics. No LLM call.",
+      inputSchema: {},
+    },
+    async () => {
+      const summary = await lint(root);
+      return jsonResult(summary);
+    },
+  );
+}
+
+function registerStatusTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "wiki_status",
+    {
+      title: "Wiki Status",
+      description:
+        "Summarize the wiki: page count, source count, last compile time, pending source " +
+        "changes, and freshness-derived page health. stalePages lists concept slugs whose " +
+        "source changed or partially disappeared since last compile. orphanedPages lists " +
+        "concept slugs whose every owning source was deleted OR that are frontmatter-flagged " +
+        "orphaned (superset of prior behavior). stateStatus reports state.json readability " +
+        "(ok | missing | corrupt) so corrupt state is never silent. Each list (stalePages, " +
+        "orphanedPages, pendingChanges) is capped at 100 entries for response size; the " +
+        "corresponding *Count fields (staleCount, orphanedCount, pendingChangesCount) give " +
+        "the true totals. Read-only — never modifies the workspace.",
+      inputSchema: {},
+    },
+    async () => jsonResult(await collectStatus(root)),
+  );
+}
+
+/**
+ * Register the `get_context_pack` tool. Delegates to the same
+ * `buildContextPack()` helper as the CLI so the returned JSON matches
+ * `llmwiki context --json` byte-for-byte (modulo prompt content).
+ *
+ * No provider guard runs here: semantic retrieval is opportunistic
+ * inside `buildContextPack` and falls back to lexical with a stable
+ * warning when credentials are missing. The pack is read-only and
+ * never mutates the workspace, so the MCP layer needs no extra checks.
+ *
+ * The body is split into `contextPackToolConfig` (static metadata) and
+ * `buildContextPackFromArgs` (the per-call adapter) so this function
+ * stays inside the project's 40-line function ceiling.
+ */
+function registerContextPackTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "get_context_pack",
+    contextPackToolConfig(),
+    async (args) => jsonResult(await buildContextPackFromArgs(root, args)),
+  );
+}
+
+/** Inline arg shape for {@link buildContextPackFromArgs}; matches `contextPackInputSchema`. */
+interface ContextPackToolArgs {
+  prompt: string;
+  budget?: number;
+  depth?: number;
+  topPages?: number;
+  topChunks?: number;
+  omitRoot?: boolean;
+  includeSources?: boolean;
+  allowedPageIds?: string[];
+}
+
+/** Static `registerTool` metadata for `get_context_pack`. */
+function contextPackToolConfig(): {
+  title: string;
+  description: string;
+  inputSchema: ReturnType<typeof contextPackInputSchema>;
+} {
+  return {
+    title: "Get Context Pack",
+    description:
+      "Build an agent-ready evidence pack for `prompt` over the compiled " +
+      "wiki: primary pages, semantic chunks, graph neighbors, citations, " +
+      "warnings, and suggested next actions. Returns the same v1 JSON " +
+      "envelope as `llmwiki context --json`. Read-only; no provider " +
+      "credentials required. Use this to PREPARE evidence; use " +
+      "`query_wiki` to GENERATE a grounded natural-language answer.",
+    inputSchema: contextPackInputSchema(),
+  };
+}
+
+/**
+ * Zod schema for the `get_context_pack` tool arguments. Extracted so
+ * the registration function stays under the project's per-function
+ * line ceiling and so the schema can be unit-tested in isolation if
+ * we ever need to.
+ */
+function contextPackInputSchema(): {
+  prompt: z.ZodString;
+  budget: z.ZodOptional<z.ZodNumber>;
+  depth: z.ZodOptional<z.ZodNumber>;
+  topPages: z.ZodOptional<z.ZodNumber>;
+  topChunks: z.ZodOptional<z.ZodNumber>;
+  omitRoot: z.ZodOptional<z.ZodBoolean>;
+  includeSources: z.ZodOptional<z.ZodBoolean>;
+  allowedPageIds: z.ZodOptional<z.ZodArray<z.ZodString>>;
+} {
+  return {
+    prompt: z.string().describe("Free-text task or topic to assemble context for."),
+    budget: z
+      .number()
+      .optional()
+      .describe("Approximate output token budget (default 8000)."),
+    depth: z
+      .number()
+      .optional()
+      .describe("Graph neighborhood depth, 0..2 (default 1, 0 disables expansion)."),
+    topPages: z.number().optional().describe("Max primary pages (default 5, max 20)."),
+    topChunks: z
+      .number()
+      .optional()
+      .describe("Max semantic chunks to surface (default 8, max 50)."),
+    omitRoot: z
+      .boolean()
+      .optional()
+      .describe("Emit `project.root` as null instead of the absolute path."),
+    includeSources: z
+      .boolean()
+      .optional()
+      .describe(
+        "Materialize `primary[].sourceWindows` from claim-level citations " +
+          "(reads files under `sources/` only; path-confined).",
+      ),
+    allowedPageIds: z
+      .array(z.string())
+      .optional()
+      .describe("Qualified page IDs to include; all ranking, graph, and source surfaces are scoped to this set."),
+  };
+}
+
+/** Per-call adapter that fans the tool args into `buildContextPack`. */
+async function buildContextPackFromArgs(
+  root: string,
+  args: ContextPackToolArgs,
+): Promise<Awaited<ReturnType<typeof buildContextPack>>> {
+  return buildContextPack({
+    root,
+    prompt: args.prompt,
+    budget: args.budget,
+    depth: args.depth,
+    topPages: args.topPages,
+    topChunks: args.topChunks,
+    omitRoot: args.omitRoot,
+    includeSources: args.includeSources,
+    allowedPageIds: args.allowedPageIds,
+  });
+}
+
+function registerEvalTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "run_eval",
+    {
+      title: "Run Eval",
+      description:
+        "Run the wiki quality eval harness. fast suite checks health and citation " +
+        "coverage without LLM calls. full suite also LLM-judges a sample of citations " +
+        "(requires an LLM provider). " +
+        "Set record: true to append results to eval history (default false — read-only).",
+      inputSchema: {
+        suite: z.enum(["fast", "full"]).optional().default("fast")
+          .describe("fast=no LLM calls, full=includes citation support (requires LLM provider)"),
+        sampleSize: z.number().int().min(1).max(100).optional()
+          .describe(`Citations to sample for citation support (full suite only, default ${DEFAULT_SAMPLE_SIZE})`),
+        record: z.boolean().optional().default(false)
+          .describe("Append results to eval history (default false; set true to persist a checkpoint)"),
+      },
+    },
+    async ({ suite, sampleSize, record }) => {
+      const report = await runEval(root, suite, sampleSize ?? DEFAULT_SAMPLE_SIZE, record ?? false);
+      return jsonResult(report);
+    },
+  );
+}
+
+/** A 64-character lowercase-hex sha256 digest — the same grammar the manifest and the CLI's `--sha256` flag enforce. */
+const ARTIFACT_SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * Validate `verify_artifact` input at the tool boundary, BEFORE any resolve call.
+ * A malformed caller input (bad slug grammar, non-hex digest) must surface as a
+ * dedicated MCP input error — never masquerade as a health verdict like
+ * `artifact-hash-mismatch` or `artifact-dangling`, which mean store corruption,
+ * not a caller typo.
+ */
+function invalidArtifactRefInput(args: { artifactType: string; slug: string; sha256: string }): string | null {
+  if (!isSlugSafe(args.artifactType)) return `invalid artifactType: ${JSON.stringify(args.artifactType)} is not slug-safe`;
+  if (!isSlugSafe(args.slug)) return `invalid slug: ${JSON.stringify(args.slug)} is not slug-safe`;
+  if (!ARTIFACT_SHA256_PATTERN.test(args.sha256)) return "invalid sha256: expected 64 lowercase hex chars";
+  return null;
+}
+
+/**
+ * Register the read-only `verify_artifact` tool: given a hash-pinned ref, returns
+ * manifest metadata + a {@link resolveArtifactRef} health verdict — NEVER the
+ * artifact body. Mirrors `artifact verify` (CLI) / `verifyArtifact` (SDK), but
+ * additionally projects manifest metadata since an MCP caller has no other way
+ * to read it — sourced from `resolveArtifactRef`'s own `manifest` return (one
+ * manifest read, not a second independent one). No write or store-wide list
+ * tool is registered anywhere over MCP (`SURFACE_HARD_CAP.mcp = "staged-write"`
+ * — see `src/workflows/authority.ts`).
+ */
+function registerVerifyArtifactTool(server: McpServer, root: string): void {
+  server.registerTool(
+    "verify_artifact",
+    {
+      title: "Verify Artifact",
+      description:
+        "Verify a hash-pinned artifact ref against the active profile's declared " +
+        "artifact types. Returns manifest metadata (artifactType, slug, sha256, " +
+        "bytes, contentKind, writtenAt) plus a health verdict — NEVER the artifact " +
+        "body. Read-only; no write or store-wide list tool is exposed over MCP.",
+      inputSchema: {
+        artifactType: z.string().describe("The profile-declared artifact type."),
+        slug: z.string().describe("The artifact's slug."),
+        sha256: z.string().describe("The 64-character lowercase-hex sha256 digest to verify against."),
+      },
+    },
+    async ({ artifactType, slug, sha256 }) => {
+      const invalid = invalidArtifactRefInput({ artifactType, slug, sha256 });
+      if (invalid) return errorResult(invalid);
+
+      const loaded = await loadNonDefaultProfile(root);
+      if (!loaded || !declaresArtifactTypes(loaded.profile)) {
+        return errorResult("no artifact types declared by the active profile");
+      }
+
+      const ref: ArtifactRef = { artifactType, slug, sha256 };
+      // `resolveArtifactRef` already reads+parses the manifest to compute health;
+      // its `manifest` (populated whenever the file parsed, independent of the
+      // verdict) IS the metadata this tool projects — one read, not two.
+      const { health, manifest } = await resolveArtifactRef(root, loaded.profile, ref);
+      return jsonResult({ ...(manifest ?? {}), health });
+    },
+  );
+}

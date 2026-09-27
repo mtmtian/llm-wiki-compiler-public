@@ -1,0 +1,475 @@
+/**
+ * llmwiki viewer — application chrome.
+ *
+ * The shell frame, header, sidebar navigation, and support rail. Every
+ * colour here is a token from viewer-tokens.css; this file declares no
+ * raw colour literals so both themes stay in sync automatically.
+ *
+ * Shell layout is TWO top-level columns (mockup tree lines 3-6): a 230px
+ * sidebar running the shell's full height, and a fluid `.main-column`
+ * beside it. The header lives INSIDE `.main-column` — it spans only the
+ * right side, not the whole shell — followed by `.content-grid`, a second,
+ * nested grid that splits the main column into the primary pane and a
+ * single 268px support rail (tree line 97). That nesting is what makes the
+ * rail a content-area concern (it starts below the header, bounded by the
+ * content column, not a top-level shell column running full height) —
+ * see the fidelity audit's A1/A2 notes. `.sidebar*` rules here must match
+ * the markup `viewer-sidebar.js` actually emits (`sidebar-lockup`,
+ * `project-block`, `nav-section`, …) — see that file's JSDoc for the
+ * render model.
+ */
+
+/* Full-bleed: no max-width, no card border, radius or shadow. The mockup's
+ * 1420px framed card is a design presentation; a local viewer should use the
+ * whole window. `min-height` makes the sidebar's right border run the full
+ * viewport height even when a route renders little content. */
+.app-shell {
+  min-height: 100vh;
+  background: var(--bg-shell);
+}
+
+/* Pinned like the sidebar, so the project identity, search and theme toggle
+ * stay reachable while the main column scrolls. It sticks within
+ * `.main-column`, so it spans the content width only and never covers the
+ * sidebar.
+ *
+ * `background` is load-bearing here, not decoration: a transparent sticky
+ * header would let scrolling content show through it.
+ *
+ * `z-index: 20` sits above everything in the content column (the graph
+ * tooltip, the highest, is 5) and below the skip link (100), which must stay
+ * on top of all chrome. The header's own search dropdown is a descendant, so
+ * it rides this stacking context rather than fighting it. */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-shell);
+}
+
+.app-identity { min-width: 0; }
+/* `margin-bottom: 7px` (mockup tree line 73) is the brand row's own space
+ * before `.app-meta` below — `.app-meta` carries no margin of its own, so
+ * the two don't compound into a 14px gap. */
+.app-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.app-logo { width: 22px; height: 22px; flex: none; opacity: 0.9; }
+
+.app-title {
+  font: 600 26px/1 var(--font-sans);
+  color: var(--fg);
+  letter-spacing: -0.03em;
+}
+
+.app-meta {
+  margin: 0;
+  font: 400 12px/1 var(--font-mono);
+  color: var(--fg-dim);
+}
+
+.freshness-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  padding: 5px 8px;
+  /* 5px is off the 4/6/8/9/11/12/14 radius scale (nearest token,
+   * --radius-badge, is 4px) — mockup tree line 77, literal per the
+   * fidelity audit's root-cause note. */
+  border-radius: 5px;
+}
+.freshness-pill[hidden] { display: none; }
+.freshness-pill::before {
+  content: "";
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.freshness-pill.is-ok { color: var(--ok); background: var(--ok-a10); border: 1px solid var(--ok-a24); }
+.freshness-pill.is-warn { color: var(--warn); background: var(--warn-a12); border: 1px solid var(--warn-border); }
+/* Neither calm nor warning: worn when a check could not run at all, so its
+ * result is unknown rather than good or bad. The health screen's Freshness
+ * panel uses it when state.json is missing or corrupt; the header's verdict
+ * pill uses it for the same reason, and when lint has never run. The calm
+ * teal would assert an all-clear nothing backs up; the warning amber would
+ * assert a problem that has not been observed. */
+.freshness-pill.is-unknown { color: var(--fg-faint); background: var(--bg-chip); border: 1px solid var(--border-chip); }
+
+.app-actions { display: flex; align-items: center; gap: 9px; flex: none; }
+
+.chrome-button {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.chrome-button:hover { background: var(--bg-hover); color: var(--fg-body); }
+
+
+.github-link {
+  display: flex; align-items: center; gap: 8px;
+  height: 34px; padding: 0 13px;
+  border-radius: var(--radius-control);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  font: 500 12px/1 var(--font-sans);
+  color: var(--fg-body);
+}
+.github-link:hover, .github-link:focus-visible { background: var(--bg-hover); text-decoration: none; }
+.github-mark { width: 15px; height: 15px; fill: currentColor; }
+.github-stars { font: 500 11px/1 var(--font-mono); color: var(--fg-dim); }
+
+/*
+ * Two explicit columns: sidebar · fluid main column (mockup tree line 4).
+ * The support rail is NOT a third column here — it now lives one level
+ * deeper, inside `.content-grid`, nested in the main column alongside the
+ * header (fidelity audit A1). That is what makes the sidebar run the
+ * shell's full height while the rail only spans the content area below
+ * the header.
+ */
+/* Stretches to the shell's full height so the sidebar column — and its
+ * right border — reach the bottom of the window on every route. */
+.app-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* The main column: header on top, `.content-grid` below it (tree line 70).
+ * Both children are block-level, so they stack without needing flex here. */
+.main-column {
+  min-width: 0;
+  background: var(--bg-shell);
+}
+
+/*
+ * The main column's own content area: primary pane + the single support
+ * rail as two grid tracks (tree line 97). This is the rail's real home —
+ * nested below the header and bounded by this grid, not a top-level shell
+ * column (fidelity audit A2). `20px 24px 26px` is the mockup's literal
+ * padding, off the 6/9/12/16/24 spacing scale, so it is written as a
+ * literal rather than snapped to the nearest token (see the fidelity
+ * audit's root-cause note).
+ */
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 268px;
+  gap: var(--space-16);
+  padding: 20px 24px 26px;
+  align-items: start;
+}
+
+/* Collapses the 268px rail track when nothing is rendered into the rail
+ * (`#/graph`, list routes, or a page whose payload has no metadata to
+ * show) — a reserved-but-empty 268px column would read as a layout bug,
+ * not a design choice. `:has()` keeps this a pure CSS concern: every
+ * route already clears the rail via `innerHTML = ""` (viewer-rail.js
+ * `clearSupportRail`) before rendering, so no JS needs to toggle a class. */
+.content-grid:has(.support-rail:empty) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/*
+ * No gap here (mockup tree line 5) — every child spaces itself via its own
+ * margin-bottom/padding (lockup, project-block, nav-list below) instead of
+ * a uniform flex gap. A gap here would compound with those per-child
+ * margins — see the fidelity audit's root-cause note.
+ */
+/* Pinned: the nav stays put while the main column scrolls. `sticky` rather
+ * than `fixed` so the sidebar keeps its grid column — `fixed` removes it from
+ * flow and the 230px track would collapse. `align-self: start` stops the grid
+ * from stretching the item to the row's full height, which would leave sticky
+ * nothing to travel within. `overflow-y: auto` lets the nav scroll on its own
+ * when it is taller than the window, so the footer card stays reachable. */
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-soft);
+  background: var(--bg-sidebar);
+  padding: 18px 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * `[data-sidebar]` (`.sidebar-nav` in the markup) is the mount point
+ * `renderSidebar()` fills — it sits one level inside `.sidebar`, as its
+ * only child (search now lives in the header's `.app-actions`, see
+ * viewer-search.js). Its non-shrinking flex column preserves the full content
+ * height on short windows so the outer sidebar scrolls; on tall windows it gives
+ * `.sidebar-footer`'s `margin-top: auto` a flex context to push against,
+ * pinning it to the sidebar's bottom edge. No gap here either, for the
+ * same reason as `.sidebar` above — each rendered child supplies its own
+ * spacing (lockup's padding-bottom, project-block/nav-list's
+ * margin-bottom) rather than a uniform gap compounding with them.
+ */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+
+
+/*
+ * Product lockup — the 34px mark beside "LLM Wiki Compiler" /
+ * "compile once · reuse forever" (design system §Component metrics),
+ * matching the markup `buildLockup()` actually emits in viewer-sidebar.js.
+ * The mark never sits on a coloured plate, so this carries no background
+ * of its own.
+ */
+/* `padding: 0 4px 18px` is the lockup's own space before `.project-block`
+ * (mockup tree line 6) — there is no gap on `.sidebar`/`.sidebar-nav` to
+ * provide it (see those rules above). */
+.sidebar-lockup { display: flex; align-items: center; gap: 11px; padding: 0 4px 18px; }
+/* No opacity here — only the 22px header logo (`.app-logo`) is dimmed. */
+.sidebar-lockup-mark { width: 34px; height: 34px; flex: none; }
+.sidebar-lockup-text { min-width: 0; }
+.sidebar-lockup-name {
+  font: 600 14px/1.15 var(--font-sans);
+  letter-spacing: -0.02em;
+  color: var(--fg-strong);
+}
+/* Mono, not sans — the design system reserves mono for machine facts,
+ * and a tagline like "compile once · reuse forever" reads as one. */
+.sidebar-lockup-tagline { margin-top: 3px; font: 400 10.5px/1.3 var(--font-mono); color: var(--fg-faint); }
+
+.project-block {
+  padding: 12px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-inset);
+  margin-bottom: 20px;
+}
+
+/*
+ * PROJECT's own eyebrow label — split from `.nav-section-label` (BROWSE/
+ * MAINTAIN) because the mockup gives it a different colour, no horizontal
+ * padding, and a 8px (not 7px) margin-bottom (tree lines 14 vs 24/44).
+ * Shares the base type treatment via the grouped selector below.
+ */
+.project-label { color: var(--fg-faint); margin-bottom: 8px; }
+.project-name { font: 500 13px/1 var(--font-sans); color: var(--fg-strong); margin-top: 8px; }
+.project-status {
+  display: flex; align-items: center; gap: 6px; margin-top: 9px;
+  font: 500 10px/1 var(--font-mono); color: var(--ok);
+}
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
+
+/* Shared type treatment for both sidebar eyebrows; colour/spacing diverge
+ * per label (see `.project-label` above and the mockup tree lines 14/24/44). */
+.nav-section-label,
+.project-label {
+  font: 500 9.5px/1 var(--font-mono);
+  letter-spacing: 0.13em;
+}
+.nav-section-label { color: var(--fg-ghost); }
+
+/*
+ * The eyebrow row. BROWSE puts the active profile's name on it, right-aligned
+ * (mockup tree lines 96-100 and 154-158) — the vocabulary in play is a property
+ * of the whole section, so it costs a header slot rather than a row. The
+ * horizontal padding and the 7px before the list live here rather than on
+ * `.nav-section-label`, so the label and the name share one baseline row;
+ * MAINTAIN renders the same wrapper with nothing to its right.
+ */
+.nav-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  margin-bottom: 7px;
+}
+
+/* Same treatment as the eyebrow it sits beside — a machine fact, so mono. */
+.nav-section-profile {
+  min-width: 0;
+  font: 500 9.5px/1 var(--font-mono);
+  color: var(--fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* `margin-bottom: 20px` (mockup tree lines 26/46) is each list's own space
+ * before the next section — there is no gap on `.sidebar`/`.sidebar-nav`
+ * to provide it (see those rules above). */
+.nav-list {
+  list-style: none; padding: 0; margin: 0 0 20px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+
+/*
+ * `23px` left padding (mockup tree lines 30/34/38/42/47/51/55/57) indents a
+ * resting label to align with an active item's label, which sits past a
+ * 3px accent bar + 10px gap (see `.nav-label::before` below) at the same
+ * effective 23px offset. The active item overrides this back to a plain
+ * `8px 10px` (tree line 27) since its own bar supplies the visual indent.
+ */
+.nav-link {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px 8px 23px;
+  border-radius: var(--radius-row);
+  border: 1px solid transparent;
+  font: 400 12.5px/1 var(--font-sans);
+  color: var(--fg-muted);
+}
+.nav-link:hover { background: var(--bg-hover); color: var(--fg-body); text-decoration: none; }
+.nav-link[aria-current="page"] {
+  padding: 8px 10px;
+  background: linear-gradient(90deg, var(--accent-a22), var(--accent-a05));
+  border-color: var(--accent-a30);
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+.nav-link[aria-current="page"] .nav-label::before {
+  content: "";
+  display: inline-block;
+  width: 3px; height: 14px;
+  margin-right: 10px;
+  vertical-align: -3px;
+  border-radius: 2px;
+  background: var(--accent-text);
+}
+
+/*
+ * The active profile's type rows: a nested list inside a single `<li>`, so
+ * BROWSE stays one `<ul>` at any type count and the fixed spine rows above and
+ * below stay its siblings, sharing `.nav-list`'s 2px gap.
+ *
+ * One sidebar scroller handles short windows; no inner cap or overlay hides
+ * the last category when there is unused vertical space.
+ */
+.nav-type-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+
+/*
+ * A type name is project data, so it can be any length. It truncates with an
+ * ellipsis and keeps its full text on hover; the count never truncates, because
+ * the count is what the eye scans for. No wrapping either — row height stays
+ * uniform however many types a profile declares. Scoped to type rows: the fixed
+ * labels are known-short, and clipping is not free on the row that is current
+ * (its accent bar renders inside the label).
+ */
+.nav-link-type .nav-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-link-type .nav-count { flex: none; }
+
+.nav-count { font: 500 10.5px/1 var(--font-mono); color: var(--fg-faint); }
+/*
+ * Zero-valued counts de-emphasise further with --fg-disabled instead of the
+ * --fg-faint non-zero counts use (mockup tree lines 44/57: the Queries "—"
+ * and the Reviews "0" are both this colour). The TEXT a zero renders as
+ * (em dash vs the literal digit) is a separate rule, keyed on BROWSE vs
+ * MAINTAIN — see NAV_SECTIONS' `zeroCountDisplay` in viewer-sidebar.js.
+ */
+.nav-count.nav-count-zero { color: var(--fg-disabled); }
+.nav-badge {
+  font: 500 10px/1 var(--font-mono);
+  color: var(--warn);
+  background: var(--warn-a12);
+  padding: 3px 6px;
+  border-radius: var(--radius-badge);
+}
+
+/*
+ * Bottom-pinned column of standing cards (mockup tree line 59). Only
+ * "Read the docs" ships today — the mockup's "Design system ↗" card links
+ * between design documents, not a product surface, so it is deliberately
+ * absent (fidelity audit, out of scope) — but the group wrapper still
+ * carries `margin-top: auto` rather than `.docs-card` itself, matching the
+ * mockup's structure so a second card would space correctly if ever added.
+ */
+.sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.docs-card {
+  padding: 12px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-inset);
+}
+.docs-card:hover { background: var(--bg-hover); text-decoration: none; }
+.docs-card-title { font: 500 12px/1.2 var(--font-sans); color: var(--fg-strong); margin-bottom: 5px; }
+.docs-card-body { font: 400 11px/1.5 var(--font-sans); color: var(--fg-dim); }
+
+/*
+ * The single support rail — shared by every route (fidelity audit A2/D2).
+ * On the dashboard it holds the compile receipt / next actions / snapshot
+ * note (`renderDashboardRail`, viewer-rail.js); on a page route it holds
+ * page metadata (`renderSupportRail`). Both write into this same element,
+ * so there is exactly one rail column, never two. It carries no padding
+ * or border of its own — `.content-grid`'s padding is what insets it from
+ * the shell edge, and each child (a `.panel`, or the plain `<dl>` a page
+ * route renders) supplies its own border/background, matching the bare
+ * flex column the mockup declares (tree line 284; `14px` is off the
+ * spacing scale, so it is a literal, not a token).
+ */
+.support-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.support-rail:empty { display: none; }
+.support-rail dt { font: 500 11.5px/1 var(--font-sans); color: var(--fg-dim); margin-top: 0.7rem; }
+.support-rail dd { margin: 0.25rem 0; color: var(--fg-body); }
+
+.placeholder { color: var(--fg-dim); font-style: italic; }
+
+/* Diagnostic identifiers remain available without dominating the reading view. */
+.technical-details { margin: 12px 0; font: 400 12px/1.5 var(--font-sans); color: var(--fg-dim); }
+.technical-details summary { cursor: pointer; }
+.technical-details pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 400 11px/1.5 var(--font-mono); }
+.record-about h2 { font: 600 16px/1.4 var(--font-sans); }
+.attachment-name { font: 600 14px/1.4 var(--font-sans); overflow-wrap: anywhere; }
+
+/* Wrap before the sidebar leaves too little room for identity plus controls. */
+@media (max-width: 1200px) {
+  .app-header { flex-direction: column; align-items: stretch; gap: 12px; }
+  .app-brand { flex-wrap: wrap; }
+  .app-title, .app-meta, .project-name { overflow-wrap: anywhere; }
+  .app-meta { line-height: 1.4; }
+  .app-actions { flex-wrap: wrap; min-width: 0; }
+  .app-actions .sidebar-search { flex: 1 1 220px; min-width: 0; max-width: 100%; }
+}
+
+@media (max-width: 900px) {
+  .app-layout { grid-template-columns: minmax(0, 1fr); }
+  /* The stacked nav must not stick over the page. Bound it so the current
+   * record remains reachable without traversing the entire category list. */
+  .sidebar {
+    position: static;
+    height: auto;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .app-header { position: static; padding: 16px; }
+  .content-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 800px) {
+  .content-grid { padding: 16px; }
+}

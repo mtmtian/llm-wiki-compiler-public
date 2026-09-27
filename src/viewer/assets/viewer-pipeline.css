@@ -1,0 +1,239 @@
+/**
+ * llmwiki viewer — the `#/pipeline` screen.
+ *
+ * Loaded after viewer-dashboard.css because the panel reuses that sheet's
+ * `.panel` / `.panel-head` / `.panel-title` shell rather than redeclaring it.
+ *
+ * Explicit counts replace proportional bars so the inventory cannot be
+ * mistaken for progress. Declared lifecycle, current counts and validation
+ * remain separate columns, stacking on narrow windows. Relationship
+ * definitions live in a native disclosure below the inventory.
+ */
+
+/* Shares its element with `.main-pane` (viewer.js sets
+ * `className = "main-pane pipeline-pane"`), whose `width: min(100%, 72ch)`
+ * prose cap would squeeze the three-column grid — the same override
+ * `.health-pane`, `.dashboard`, `.graph-pane` and `.list-pane` each make. */
+.pipeline-pane { width: 100%; }
+
+.pipeline-panel { overflow: hidden; }
+
+/* ---- Panel head ---- */
+
+/* The mockup's head padding is 14px 18px, one pixel wider than the shared
+ * `.panel-head` 14px 17px, and the legend needs room to sit on one line. */
+.pipeline-head { padding: 14px 18px; gap: 14px; flex-wrap: wrap; }
+
+.pipeline-head-group { display: flex; align-items: center; gap: var(--space-9); }
+
+.pipeline-profile-badge {
+  font: var(--type-badge);
+  color: var(--accent-text);
+  background: var(--accent-a12);
+  /* 4px 6px is off the spacing scale — tree line 46. */
+  padding: 4px 6px;
+  border-radius: var(--radius-badge);
+}
+
+.pipeline-explanation { margin: 0; padding: 14px 18px; color: var(--fg-muted); font: 400 13px/1.5 var(--font-sans); }
+
+/* ---- The three-column grid ---- */
+
+/* 224px / 148px are the mockup's fixed side columns; the tally takes what is
+ * left. `minmax(0, 1fr)` (not `1fr`) so a long chip row wraps instead of
+ * pushing the right column off the panel. */
+.pipeline-columns {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr) 148px;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  align-items: start;
+}
+
+.pipeline-column-head {
+  /* 10px 18px on the head band, not the rows' 16px — tree line 56. */
+  padding: 10px 18px;
+  font: var(--type-label);
+  letter-spacing: 0.1em;
+  color: var(--fg-ghost);
+  align-items: center;
+}
+.pipeline-col-right { text-align: right; }
+
+/* ---- Left column: the type and what it declares ---- */
+
+.pipeline-type { min-width: 0; }
+
+.pipeline-type-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: var(--space-6);
+}
+
+/* 500 14px/1.2 sans has no matching token — tree line 63. A long entity type
+ * truncates rather than reflowing the bar and the tally column beside it. */
+.pipeline-type-name {
+  font: 500 14px/1.2 var(--font-sans);
+  color: var(--fg-strong);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 600 14px/1 sans has no matching token — tree line 64. */
+.pipeline-type-count { font: 600 14px/1 var(--font-sans); color: var(--fg); flex: none; }
+
+/* 500/400 10.5px/1.55 mono have no matching token — tree lines 66/67. */
+.pipeline-chain { font: 500 10.5px/1.55 var(--font-mono); color: var(--fg-muted); }
+.pipeline-declared { font: 400 10.5px/1.55 var(--font-mono); color: var(--fg-faint); }
+
+/* ---- Middle column: state counts and any reachability callout ---- */
+
+.pipeline-tally { min-width: 0; }
+
+.pipeline-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+/* The chips are the last thing in the cell unless a callout follows them. */
+.pipeline-chips:not(:last-child) { margin-bottom: var(--space-9); }
+
+.pipeline-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  /* 5px 8px is off the spacing scale — tree line 77. */
+  padding: 5px 8px;
+  border-radius: 5px;
+  font: 500 13px/1.4 var(--font-mono);
+  color: var(--fg-muted);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-strong);
+}
+/* An unreachable chip is dashed as well as red: the border says "not part of
+ * the graph" without asking the reader to distinguish two hues. */
+.pipeline-chip.is-unreachable {
+  color: var(--danger-muted);
+  background: var(--danger-surface);
+  border: 1px dashed var(--danger-edge);
+}
+
+.pipeline-swatch { width: 7px; height: 7px; border-radius: 2px; background: var(--accent-text); }
+.pipeline-swatch.is-terminal { background: var(--ok); }
+.pipeline-swatch.is-unreachable { background: var(--danger); }
+.pipeline-chip.is-empty { color: var(--fg-dim); background: transparent; }
+
+.pipeline-callout {
+  /* 9px 11px is off the spacing scale — tree line 82. */
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: var(--danger-surface);
+  border: 1px solid var(--danger-border);
+  /* 400 11.5px/1.5 sans has no matching token — tree line 83. */
+  font: 400 11.5px/1.5 var(--font-sans);
+  color: var(--danger-muted);
+}
+.pipeline-callout + .pipeline-callout { margin-top: var(--space-6); }
+.pipeline-callout-state { font: 500 11px/1 var(--font-mono); color: var(--danger); }
+
+/* 400 11.5px/1.5 sans, the same body size as the callout — a type with no
+ * tallied state has nothing to draw, and says so rather than showing a track. */
+.pipeline-none { font: 400 11.5px/1.5 var(--font-sans); color: var(--fg-faint); }
+
+/* ---- Right column: the tally sum and its finding ---- */
+
+.pipeline-verdict { text-align: right; }
+
+/* 600 18px/1 sans has no matching token — tree line 87. */
+.pipeline-sum { font: 600 18px/1 var(--font-sans); color: var(--fg); letter-spacing: -0.03em; }
+.pipeline-sum.is-empty { color: var(--fg-disabled); }
+
+/* 400 10px/1.45 mono has no matching token — tree line 88. --warn, not
+ * --danger: rejected pages counted here is a finding to name, not a fault in
+ * this panel. A clean row reads --ok, the same "nothing to do" green the rest
+ * of the app uses. */
+.pipeline-gap {
+  font: 400 10px/1.45 var(--font-mono);
+  color: var(--warn);
+  margin-top: var(--space-6);
+  /* The mockup breaks this line by hand ("2 rejected pages" / "counted here").
+   * Balancing gets the same two even lines from one text node — no `<br>` to
+   * wedge into the middle of a sentence the tests read as a whole. */
+  text-wrap: balance;
+}
+.pipeline-gap.is-clean { color: var(--ok); }
+
+/* ---- Relation types band ---- */
+
+/* Raised off the rows above by --bg-sunken, and vertically centred rather than
+ * top-aligned: it is a summary line, not another row — tree line 141. */
+.pipeline-relations { padding: 14px 18px; background: var(--bg-sunken); align-items: center; }
+.pipeline-relations summary { cursor: pointer; font: 500 14px/1.5 var(--font-sans); color: var(--fg-strong); }
+.pipeline-relations[open] summary { margin-bottom: 12px; }
+.pipeline-relations-note { margin-bottom: 12px; }
+
+.pipeline-eyebrow {
+  font: var(--type-label);
+  letter-spacing: 0.1em;
+  color: var(--fg-ghost);
+  margin-bottom: 7px;
+}
+/* 400 11.5px/1.4 sans has no matching token — tree line 144. */
+.pipeline-relations-note { font: 400 11.5px/1.4 var(--font-sans); color: var(--fg-dim); }
+
+.pipeline-relation-chips { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.pipeline-relation-chips th, .pipeline-relation-chips td { padding: 12px 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.pipeline-relation-chips th { font: 500 12px/1.4 var(--font-sans); }
+.connection-open { cursor: pointer; color: var(--accent-text); background: var(--bg-hover); border: 1px solid var(--border-strong); border-radius: 5px; padding: 6px 8px; font: inherit; }
+.connection-records ul { padding-left: 16px; }
+.connection-records li { margin-top: 8px; }
+
+.pipeline-relation-chip {
+  display: table-row;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-9);
+  /* 6px 10px is off the spacing scale — tree line 147. */
+  padding: 6px 10px;
+  border-radius: 5px;
+  font: 400 13px/1.5 var(--font-sans);
+  color: var(--fg-muted);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-strong);
+}
+.pipeline-relation-endpoint { color: var(--fg-faint); }
+.pipeline-relation-arrow { color: var(--accent-text); }
+.pipeline-relation-count { color: var(--fg); }
+
+/* 400 10.5px/1.4 mono has no matching token — tree line 149. */
+.pipeline-relations-summary {
+  text-align: right;
+  font: 400 10.5px/1.4 var(--font-mono);
+  color: var(--fg-faint);
+}
+
+/* ---- Rejected-pages footer ---- */
+
+/* The warm band, not a red one: these pages are already reported as problems on
+ * Health, and this states what they mean for the numbers above — tree line 152. */
+.pipeline-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  /* 13px 18px is off the spacing scale — tree line 152. */
+  padding: 13px 18px;
+  background: var(--warn-bg);
+  border-top: 1px solid var(--warn-divider);
+}
+.pipeline-footer-text { font: 400 11.5px/1.5 var(--font-sans); color: var(--warn-muted); }
+.pipeline-footer-link { font: 500 11px/1 var(--font-mono); flex: none; }
+
+/* Below the mockup's 1420px the three fixed columns stop fitting: the panel
+ * becomes one column per row so the bar keeps a usable width instead of
+ * collapsing to a sliver. */
+@media (max-width: 900px) {
+  .pipeline-columns { grid-template-columns: minmax(0, 1fr); }
+  .pipeline-column-head { display: none; }
+  .pipeline-col-right, .pipeline-verdict, .pipeline-relations-summary { text-align: left; }
+}

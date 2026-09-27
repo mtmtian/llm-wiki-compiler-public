@@ -1,0 +1,190 @@
+---
+title: "Review Queue - Inspect and Approve Generated Wiki Pages"
+sidebarTitle: "Review"
+description: "Use llmwiki compile --review and the review subcommands to inspect, approve, or reject generated pages before they land in your wiki."
+---
+
+By default, `llmwiki compile` writes pages directly to `wiki/`. That's fine for a personal knowledge base where you trust the compiler's output - but when you're building something authoritative, populating a shared wiki, or working with sources that contain conflicting or uncertain information, you may want to review each generated page before it goes live.
+
+The review queue gives you that control. Instead of writing pages, compile deposits them as JSON candidate records in `.llmwiki/candidates/`. You inspect each one, then either approve it (which writes it to `wiki/` and refreshes the index) or reject it (which archives it without touching the wiki). The wiki only changes when you say so.
+
+---
+
+## Entering the review queue
+
+Add `--review` to any `compile` invocation to route all generated pages through the queue:
+
+```bash
+llmwiki compile --review
+```
+
+When the compile finishes, it reports how many pages were written and how many were held:
+
+```
+Wrote 8 page(s), held 2 for review - run `llmwiki review list`
+```
+
+Pages that were already live and haven't changed are not affected. Only newly generated or updated candidates are held.
+
+<Note>
+  `--review` is all-or-nothing on the command line - every generated page goes to the queue. For more granular control (e.g. automatically hold only low-confidence or contradicted pages while writing the rest live), see [Review Policy](/configuration/review-policy).
+</Note>
+
+---
+
+## Review subcommands
+
+Before approving concept/query drafts, you can request an advisory citation check:
+
+```bash
+llmwiki eval --candidates --suite full --out json
+```
+
+This evaluates a sample against current source passages without approving or
+changing any candidate. Use `llmwiki eval --candidates` for an evidence inventory
+without model calls. See [pending draft evaluation](/cli/lint-eval#evaluate-pending-drafts-before-approval)
+for costs, evidence changes, sampling limits, and report files.
+
+### `llmwiki review list`
+
+List all pending candidates:
+
+```bash
+llmwiki review list
+```
+
+Each row shows the candidate ID, slug, review mode, reason codes, generation timestamp, and contributing sources. The reason codes tell you why the page was held - useful when you're using a review policy that holds pages selectively.
+
+### `llmwiki review show <id>`
+
+Inspect a single candidate in full:
+
+```bash
+llmwiki review show <id>
+```
+
+The output includes:
+
+- **Title, slug, and summary** - the page's metadata
+- **Sources** - which source files contributed to this page
+- **Review mode and reason codes** - why the page was held, with detail where available
+- **Confidence** - the LLM-reported confidence score, if present
+- **Contradiction flag** - whether the page declares `contradictedBy` entries
+- **Full page body** - the complete markdown content, exactly as it would be written to `wiki/`
+- **Schema violations** - any cross-link rules the page fails, if a schema is configured
+- **Provenance violations** - any broken or malformed citation markers
+- **Connector draft hash** - for connector candidates, the `draft-content-hash`
+  required by `review approve`
+
+Use `review show` to read the proposed page before deciding to approve or reject it.
+
+### `llmwiki review approve <id>`
+
+Promote a candidate into the live wiki:
+
+```bash
+llmwiki review approve <id>
+```
+
+Connector-fetched candidates require an extra approval pin:
+
+```bash
+llmwiki review show <id>
+llmwiki review approve <id> --draft-content-hash <hash-from-show>
+```
+
+The hash is computed from the exact candidate body printed by `review show`.
+Approval re-reads and re-hashes the candidate under the project lock. If the
+body changed after you inspected it, approval refuses and you must review the
+candidate again.
+
+Approval does the following in order:
+
+1. Acquires `.llmwiki/lock` to serialize against concurrent compiles or sibling approvals
+2. Re-reads the candidate under the lock (to guard against a concurrent reject that may have run between your `review show` and now)
+3. Validates the page body
+4. Writes the page to `wiki/concepts/<slug>.md`
+5. Refreshes wikilink resolution, `wiki/index.md`, the Map of Content, and embeddings
+6. Removes the candidate file from `.llmwiki/candidates/`
+7. Records the approved slug in state so future compiles track it correctly
+
+The page body stored in the candidate is written verbatim - approval never re-invokes the LLM.
+
+<Warning>
+  Embeddings refresh may fail if no provider credentials are configured at approval time. When that happens, a warning is printed but the approval still succeeds - the page is written and the index is updated. Re-run `llmwiki compile` or `llmwiki refresh --stale` later to pick up the missing embeddings.
+</Warning>
+
+### `llmwiki review reject <id>`
+
+Archive a candidate without touching the wiki:
+
+```bash
+llmwiki review reject <id>
+```
+
+Rejected candidates are moved to `.llmwiki/candidates/archive/`. They no longer appear in `review list`, but they remain on disk for audit purposes. A rejected candidate for an unchanged source won't be re-extracted on the next `compile` - the rejection is sticky until the source itself changes.
+
+---
+
+## How candidates record their reason
+
+Every candidate records **why** it was held. The reason codes surface in `review list` (compact) and `review show` (with detail):
+
+| Reason code | Meaning |
+|-------------|---------|
+| `manual` | Held because `--review` was passed explicitly |
+| `low-confidence` | Page `confidence` is below the configured threshold |
+| `contradicted` | Page declares `contradictedBy` entries |
+| `schema-violating` | Page fails a schema cross-link rule |
+| `provenance-violating` | Page has broken or malformed citations |
+| `imported-okf` | Page was imported from an OKF bundle |
+| `connector-fetched` | Page was fetched by a first-party connector |
+
+When you're using a [review policy](/configuration/review-policy), only pages that trip an enabled reason code are held - the rest are written live.
+
+## Typed and external candidates
+
+Profile-aware imports and connectors can stage typed candidates. `review show`
+prints the target entity directory, such as `wiki/papers/<slug>.md`, before you
+approve. Approval routes typed candidates through the active profile's field
+contracts, lifecycle rules, relation preconditions, and artifact preconditions.
+
+Imported OKF candidates and connector candidates are external content. Treat the
+body as untrusted until you have reviewed it. Connector-origin body and mapped
+field content are fenced in review, context, and export surfaces so agents see
+it as data rather than instructions.
+
+---
+
+## `refresh --stale` and the review queue
+
+`llmwiki refresh --stale` honors the same review policy as `compile`. If you have a policy configured, stale pages recompiled by `refresh --stale` will be held for review rather than written directly when they trip a policy rule.
+
+```bash
+llmwiki refresh --stale          # repairs stale pages, respects review policy
+llmwiki refresh --stale --dry-run  # preview only, no LLM calls or writes
+```
+
+---
+
+## Deletion bookkeeping
+
+`compile --review` does **not** orphan-mark deleted sources. If you deleted a source file since the last compile, the pages it contributed won't be marked orphaned until the next non-review `compile`. The `--review` help text advertises this behavior explicitly.
+
+If you need orphan detection, run a non-review compile:
+
+```bash
+llmwiki compile   # writes pages live AND processes orphan cleanup
+```
+
+---
+
+## Checking the queue from an agent
+
+The MCP `wiki_status` tool exposes a `pendingCandidates` field so agents can see how many candidates are waiting for review without running any CLI commands. See [llmwiki serve](/cli/serve) for MCP tool details.
+
+---
+
+## Automated policy-based review
+
+Rather than manually passing `--review` every time, you can declare a review policy in `.llmwiki/config.json` to automatically hold risky pages while writing safe ones live. See [Review Policy](/configuration/review-policy) for the full configuration reference, including all reason codes, the `lowConfidenceThreshold` setting, and fail-closed behavior.

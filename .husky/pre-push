@@ -1,0 +1,9 @@
+# Git exports checkout-specific locators to hooks. Test fixtures create their
+# own repositories; inheriting these variables can overwrite this checkout's
+# HEAD and index even when a child command uses a temporary working directory.
+for repository_variable in $(git rev-parse --local-env-vars); do
+  unset "$repository_variable"
+done
+
+npm run build
+npm test
