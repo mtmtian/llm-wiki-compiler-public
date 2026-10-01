@@ -28,6 +28,7 @@ from queue_recovery import (fail_batch, move_terminal_source, reconcile_failed_b
 from queue_wire import EventTooLarge, checked_request, job_bytes
 from queue_intake import cleanup_terminal_pending as _cleanup_terminal_pending
 from queue_intake import load_jobs as _load_jobs
+from review_capacity import should_wait_for_review
 from review_retry import finish_review_retry, prepare_review_retry, verify_prepared_retry, verify_review_retry
 from session_schedule import marked as session_marked
 from session_state import (commit_batch, context_for_job, discard_pending,
@@ -316,6 +317,8 @@ def _run_batch(config, invoke, selected, now):
         return _oversize_batch(config, audit_path, audit, selected, now, "process-envelope-byte-limit")
     except (OSError, ValueError, KeyError, TypeError) as error:
         return _reject_review_drift(state, audit_path, audit, error)
+    if should_wait_for_review(config, audit["job"]):
+        return {"status": "deferred", "reason": "review-queue-full", "jobs": len(selected), "attempted": False}
     if not _take_budget(config, now):
         return {"status": "deferred", "reason": "daily-budget", "jobs": len(selected), "attempted": False}
     return _invoke_batch(config, invoke_config, invoke, audit_path, audit, selected, now)
@@ -353,7 +356,8 @@ def _drain_result(outcomes, records, deferred, imported, recovered):
               "recovered": recovered, "deferred": deferred, "results": outcomes}
     if not outcomes and not records:
         result["reason"] = "empty"
-    for reason in ("daily-budget", "finalize-backoff", "finalize-error", "replica-sync", "replica-backoff", "oversize", "batch-byte-limit"):
+    for reason in ("review-queue-full", "daily-budget", "finalize-backoff", "finalize-error", "replica-sync",
+                   "replica-backoff", "oversize", "batch-byte-limit"):
         if any(item.get("reason") == reason for item in outcomes):
             result["reason"] = reason
     result["finalizeErrors"] = sum(item.get("finalizeErrors", 0) for item in outcomes)

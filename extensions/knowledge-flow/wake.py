@@ -79,8 +79,8 @@ def _reasons(before: dict[str, int], after: dict[str, int], drained: dict[str, A
         reasons.append("lock-busy")
     if drained.get("deferred"):
         reasons.append("retry-or-debounce")
-    if drained.get("reason") == "daily-budget":
-        reasons.append("daily-budget")
+    if drained.get("reason") in ("daily-budget", "review-queue-full"):
+        reasons.append(drained["reason"])
     if drained.get("reason") == "event-disabled":
         reasons.append("event-disabled")
     if drained.get("finalizeErrors", 0) or drained.get("replicaErrors", 0) or any(item.get("status") == "error" for item in drained.get("results", [])):
