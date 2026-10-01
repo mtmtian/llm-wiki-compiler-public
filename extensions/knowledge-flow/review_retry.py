@@ -53,17 +53,17 @@ def _read_source(state, identifier):
     batch_text = (state / "batches" / (identifier + ".json")).read_text()
     batch = json.loads(batch_text)
     anchor_text, anchor = _read_anchor(state, identifier, batch)
-    review = json.loads(anchor_text)
+    hold = json.loads(anchor_text)
     job = batch.get("job", {})
-    if (review.get("jobId") != identifier or batch.get("batchId") != identifier
+    if (hold.get("jobId") != identifier or batch.get("batchId") != identifier
             or job.get("id") != identifier or batch.get("status") != "completed"
             or batch.get("result", {}).get("status") != "needs_review"
             or batch.get("result", {}).get("contribution")
-            or review.get("projectId") != job.get("projectId")
+            or hold.get("projectId") != job.get("projectId")
             or not isinstance(job.get("sessionContext"), dict)
             or not isinstance(job.get("evidence"), list) or not job["evidence"]):
         raise ValueError("retry requires a completed held session with original evidence")
-    return {"review": review, "batch": batch, "anchor": anchor, "reviewHash": digest(anchor_text),
+    return {"review": hold, "batch": batch, "anchor": anchor, "reviewHash": digest(anchor_text),
             "batchHash": digest(batch_text)}
 
 

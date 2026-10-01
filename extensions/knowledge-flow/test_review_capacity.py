@@ -6,6 +6,7 @@ invoke no model, while still letting the existing guard take over once the
 shared intake queue is crowded, so one backlog cannot block every project.
 """
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -56,19 +57,35 @@ class ReviewCapacityTests(unittest.TestCase):
         self.assertEqual(result["reason"], "review-queue-full")
         self.assertFalse((self.state / "daily-budget.json").exists())
         self.assertEqual(queued.read_bytes(), before)
+        self.assertEqual(list((self.state / "batches").glob("*.json")), [])
         self.assertIn("review-queue-full", _reasons({}, {}, result))
 
-    def test_freed_review_slot_lets_the_waiting_turn_run(self):
-        """Given a deferred turn, When one review is resolved, Then the next wake processes it."""
+    def test_freed_review_slot_runs_waiting_turns_as_one_batch(self):
+        """Given turns that waited unclaimed, When one review is resolved, Then they run together."""
         self.hold("old-1")
         self.hold("old-2")
-        queued = self.enqueue("turn")
+        self.enqueue("turn")
+        self.drain()
+        self.enqueue("turn-2")
         self.drain()
         (self.state / "review/old-2.json").unlink()
         result = self.drain()
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(result["processed"], 1)
-        self.assertFalse(queued.exists())
+        self.assertEqual(sorted(self.calls[0][2]["job"]["sourceJobIds"]), ["turn", "turn-2"])
+        self.assertEqual(result["processed"], 2)
+        self.assertEqual(list((self.state / "queue").glob("*.json")), [])
+
+    def test_already_claimed_batch_is_not_held_back(self):
+        """A batch claimed before the queue filled continues so its durable result can finalize."""
+        self.hold("old-1")
+        self.hold("old-2")
+        job = self.enqueue("turn").read_text()
+        merged = {**json.loads(job), "id": "batch-claimed", "sourceJobIds": ["turn"],
+                  "sourceQueueFiles": ["turn.json"]}
+        save_json(self.state / "batches/batch-claimed.json", {"version": 1, "batchId": "batch-claimed",
+                  "status": "claimed", "queueFiles": ["turn.json"], "job": merged})
+        self.drain()
+        self.assertEqual(len(self.calls), 1)
 
     def test_other_projects_reviews_do_not_block(self):
         """Holds of another project never count against this project's capacity."""

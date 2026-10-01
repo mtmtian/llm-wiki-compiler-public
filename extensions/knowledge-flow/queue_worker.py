@@ -317,8 +317,6 @@ def _run_batch(config, invoke, selected, now):
         return _oversize_batch(config, audit_path, audit, selected, now, "process-envelope-byte-limit")
     except (OSError, ValueError, KeyError, TypeError) as error:
         return _reject_review_drift(state, audit_path, audit, error)
-    if should_wait_for_review(config, audit["job"]):
-        return {"status": "deferred", "reason": "review-queue-full", "jobs": len(selected), "attempted": False}
     if not _take_budget(config, now):
         return {"status": "deferred", "reason": "daily-budget", "jobs": len(selected), "attempted": False}
     return _invoke_batch(config, invoke_config, invoke, audit_path, audit, selected, now)
@@ -365,6 +363,19 @@ def _drain_result(outcomes, records, deferred, imported, recovered):
     return result
 
 
+def _review_wait(config, state, selected):
+    """Unclaimed work for a project with a full review queue waits before any claim.
+
+    Waiting before ``_claim_batch`` keeps no frozen selection, replica basis or
+    budget for a wait that can last days; an already claimed batch continues so
+    its durable result can still finalize.
+    """
+    if (_existing_audit(state, [path.name for path, _ in selected])
+            or not should_wait_for_review(config, selected[0][1])):
+        return None
+    return {"status": "deferred", "reason": "review-queue-full", "jobs": len(selected), "attempted": False}
+
+
 def _select_due(state, records, due, now, config, postponed):
     """Select frozen work first while keeping deferred sessions isolated this wake."""
     blocked = _frozen_names(state) | postponed
@@ -394,7 +405,7 @@ def _drain_locked(config, invoke, state, now, limit, imported, recovered):
         if not selected:
             deferred = len(records)
             break
-        outcome = _run_batch(config, invoke, selected, now)
+        outcome = _review_wait(config, state, selected) or _run_batch(config, invoke, selected, now)
         outcomes.append(outcome)
         work_count += int(outcome.get("attempted", False) or outcome.get("status") != "deferred")
         reconcile_failed_batches(state)
