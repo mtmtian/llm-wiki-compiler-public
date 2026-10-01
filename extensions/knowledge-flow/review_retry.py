@@ -4,6 +4,11 @@ An operator retry is a new attempt, not approval and not a replay of an old
 publication. The original review, batch, model cache and session cursor remain
 intact. The queue pins today's accepted replica for the new review while using
 the exact original evidence; finalization links the old hold to its outcome.
+
+A batch refused because its project's review queue was full has no review
+file; its ``audit`` record is the frozen anchor instead.  Such a retry frees no
+review slot, so it is only staged while the project has room, and a retry that
+is refused again simply leaves the original hold in place.
 """
 
 import copy
@@ -15,6 +20,7 @@ from pathlib import Path
 from common import digest, load_json, page_ids, save_json
 from queue_schedule import clock_value, iso
 from queue_wire import checked_request, job_bytes
+from review_capacity import QUEUE_FULL_ERROR, review_queue_full
 
 
 def _identifier(value):
@@ -24,21 +30,40 @@ def _identifier(value):
     return value
 
 
+def _anchor_path(state, identifier, anchor):
+    """Where a hold's frozen anchor lives: its review, or the queue-full audit."""
+    return state / anchor / (identifier + ".json")
+
+
+def _read_anchor(state, identifier, batch):
+    """Return the hold record and its kind; a queue-full hold is anchored by its audit."""
+    review_path = _anchor_path(state, identifier, "review")
+    if review_path.exists():
+        return review_path.read_text(), "review"
+    text = _anchor_path(state, identifier, "audit").read_text()
+    audit = json.loads(text)
+    if (audit.get("status") != "needs_review" or audit.get("error") != QUEUE_FULL_ERROR
+            or batch.get("result", {}).get("error") != QUEUE_FULL_ERROR):
+        raise ValueError("retry requires a completed held session with original evidence")
+    return text, "audit"
+
+
 def _read_source(state, identifier):
     """Only a completed held session with frozen evidence can be reprocessed."""
-    review_text = (state / "review" / (identifier + ".json")).read_text()
     batch_text = (state / "batches" / (identifier + ".json")).read_text()
-    review, batch = json.loads(review_text), json.loads(batch_text)
+    batch = json.loads(batch_text)
+    anchor_text, anchor = _read_anchor(state, identifier, batch)
+    hold = json.loads(anchor_text)
     job = batch.get("job", {})
-    if (review.get("jobId") != identifier or batch.get("batchId") != identifier
+    if (hold.get("jobId") != identifier or batch.get("batchId") != identifier
             or job.get("id") != identifier or batch.get("status") != "completed"
             or batch.get("result", {}).get("status") != "needs_review"
             or batch.get("result", {}).get("contribution")
-            or review.get("projectId") != job.get("projectId")
+            or hold.get("projectId") != job.get("projectId")
             or not isinstance(job.get("sessionContext"), dict)
             or not isinstance(job.get("evidence"), list) or not job["evidence"]):
         raise ValueError("retry requires a completed held session with original evidence")
-    return {"review": review, "batch": batch, "reviewHash": digest(review_text),
+    return {"review": hold, "batch": batch, "anchor": anchor, "reviewHash": digest(anchor_text),
             "batchHash": digest(batch_text)}
 
 
@@ -73,6 +98,8 @@ def _stage_retry(config, state, identifier, source, created, dry_run):
                      if (state / folder / (retry_id + ".json")).exists()), None)
     if not existing and len(list((state / "queue").glob("*.json"))) >= int(config.get("maxQueuedJobs", 30)):
         raise ValueError("queue capacity reached")
+    if not existing and source["anchor"] == "audit" and review_queue_full(config, job):
+        raise ValueError(QUEUE_FULL_ERROR + "; resolve held reviews first")
     if not dry_run and not existing:
         save_json(manifest_path, prior or {"version": 1, "originalJobId": identifier,
                   "createdAt": created, "job": job, **source})
@@ -126,7 +153,7 @@ def verify_review_retry(config, job, expected_id=None):
         raise ValueError("review retry provenance missing")
     _verify_job(frozen, job, retry_id)
     original = _identifier(original)
-    source = state / "review" / (original + ".json")
+    source = _anchor_path(state, original, frozen.get("anchor", "review"))
     if source.exists():
         if digest(source.read_text()) != frozen["reviewHash"]:
             raise ValueError("original review changed during reprocessing")
@@ -175,14 +202,20 @@ def finish_review_retry(config, job, result):
     original, retry_id = job["reviewRetryOf"], job["id"]
     if result.get("status") not in ("empty", "submitted", "published", "needs_review"):
         raise ValueError("review retry is not terminal")
+    anchor = frozen.get("anchor", "review")
     if result.get("status") == "needs_review" and not (state / "review" / (retry_id + ".json")).is_file():
+        if anchor == "audit" and result.get("error") == QUEUE_FULL_ERROR:
+            return  # refused again: the original queue-full hold stays as it was
         raise ValueError("successor review missing")
-    source = state / "review" / (original + ".json")
+    source = _anchor_path(state, original, anchor)
     archive = state / "resolved" / (original + ".json")
+    resolved = load_json(archive, {}).get("retryJobId") == retry_id
     if not source.exists():
-        if load_json(archive, {}).get("retryJobId") == retry_id:
+        if resolved:
             return
         raise ValueError("original review disappeared")
-    save_json(archive, {"action": "reprocessed", "resolvedAt": iso(clock_value(None)),
-              "retryJobId": retry_id, "review": frozen["review"], "result": result})
-    source.unlink()
+    if not resolved:
+        save_json(archive, {"action": "reprocessed", "resolvedAt": iso(clock_value(None)),
+                  "retryJobId": retry_id, "review": frozen["review"], "result": result})
+    if anchor == "review":
+        source.unlink()  # an audit anchor is the immutable record of the refusal and stays

@@ -28,6 +28,7 @@ from queue_recovery import (fail_batch, move_terminal_source, reconcile_failed_b
 from queue_wire import EventTooLarge, checked_request, job_bytes
 from queue_intake import cleanup_terminal_pending as _cleanup_terminal_pending
 from queue_intake import load_jobs as _load_jobs
+from review_capacity import should_wait_for_review
 from review_retry import finish_review_retry, prepare_review_retry, verify_prepared_retry, verify_review_retry
 from session_schedule import marked as session_marked
 from session_state import (commit_batch, context_for_job, discard_pending,
@@ -353,12 +354,26 @@ def _drain_result(outcomes, records, deferred, imported, recovered):
               "recovered": recovered, "deferred": deferred, "results": outcomes}
     if not outcomes and not records:
         result["reason"] = "empty"
-    for reason in ("daily-budget", "finalize-backoff", "finalize-error", "replica-sync", "replica-backoff", "oversize", "batch-byte-limit"):
+    for reason in ("review-queue-full", "daily-budget", "finalize-backoff", "finalize-error", "replica-sync",
+                   "replica-backoff", "oversize", "batch-byte-limit"):
         if any(item.get("reason") == reason for item in outcomes):
             result["reason"] = reason
     result["finalizeErrors"] = sum(item.get("finalizeErrors", 0) for item in outcomes)
     result["replicaErrors"] = sum(item.get("replicaErrors", 0) for item in outcomes)
     return result
+
+
+def _review_wait(config, state, selected):
+    """Unclaimed work for a project with a full review queue waits before any claim.
+
+    Waiting before ``_claim_batch`` keeps no frozen selection, replica basis or
+    budget for a wait that can last days; an already claimed batch continues so
+    its durable result can still finalize.
+    """
+    if (_existing_audit(state, [path.name for path, _ in selected])
+            or not should_wait_for_review(config, selected[0][1])):
+        return None
+    return {"status": "deferred", "reason": "review-queue-full", "jobs": len(selected), "attempted": False}
 
 
 def _select_due(state, records, due, now, config, postponed):
@@ -390,7 +405,7 @@ def _drain_locked(config, invoke, state, now, limit, imported, recovered):
         if not selected:
             deferred = len(records)
             break
-        outcome = _run_batch(config, invoke, selected, now)
+        outcome = _review_wait(config, state, selected) or _run_batch(config, invoke, selected, now)
         outcomes.append(outcome)
         work_count += int(outcome.get("attempted", False) or outcome.get("status") != "deferred")
         reconcile_failed_batches(state)
