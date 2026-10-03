@@ -64,7 +64,7 @@ the complete previous page `basisHash` (null for creation), Markdown `body`, and
 The independent reviewer can accept an explicit user change while preserving useful
 prior rationale, constraints and counterexamples. It holds unresolved conflicts and uncertain
 intent. Multi-turn approvals retain both original proposal and approval quotes.
-The reviewer also returns a conclusion for each claim (`claimDecisions`). Until the ledger gate exists and is enabled (`deployment/KNOWLEDGE-LEDGER.md` §7), these only travel on the batch result as `claimReviews`, one entry per review attempt, for the observation period; the page-level decision still decides every outcome, and a missing or incomplete list is recorded as incomplete rather than holding the batch.
+The reviewer also returns a conclusion for each claim (`claimDecisions`); each review attempt's conclusions travel on the batch result as `claimReviews`, and a missing or incomplete list is recorded as incomplete rather than holding the batch. The page-level decision still decides whether a batch publishes or is held. When the knowledge-ledger gate is enabled (`deployment/KNOWLEDGE-LEDGER.md` §7), a held batch whose final review accepted some claims publishes exactly those claims, with only the evidence they cite, as one ledger record (version 3) and stays held; a closed gate, an unready reader or a contract violation publishes nothing and records `ledgerError`.
 The editor and reviewer also receive original files cited by the prior page;
 missing sources stop the batch for review. One bounded correction may address
 review findings. Invalid routing or incomplete review coverage is held with the

@@ -103,6 +103,9 @@ def immutable_write(path, value):
 def export_result(config, job, result):
     """Export reviewed quote-only knowledge, leaving complete evidence private."""
     exchange = settings(config)
+    if result.get("status") == "needs_review" and "ledgerContribution" in result:
+        from replica import publish_ledger
+        return publish_ledger(config, job, result)
     if result.get("status") != "submitted":
         return result
     if exchange and exchange.get("protocolVersion") == 2 and config.get("publishEnabled"):
