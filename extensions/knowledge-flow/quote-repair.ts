@@ -11,15 +11,26 @@
  * - a quote found verbatim in exactly one other evidence item is rebound to that item.
  * Paraphrases and fragments stitched with ellipses stay unchanged for the validator. Evidence
  * roles are applied afterwards, so a rebound claim gets the authority of its real source.
+ *
+ * A correction must not move a claim to unrelated evidence either: nearly half of stored corrections
+ * pinned every claim to one quote option (often an old user message). preserveEvidence keeps a
+ * corrected claim on the evidence it cited before whenever it is clearly the same claim, unless the
+ * previous review did not accept that claim (then a different source may be the fix).
  */
 import type { FlowClaim, FlowEvidence } from "./types.js";
 import type { TopicDraft } from "./consolidation-draft.js";
+import { resolveQuote } from "./consolidation-quotes.js";
 import type { CorrectionEvidence } from "./consolidation-quotes.js";
 
 const REMOVED = /[*_`#>]/;
 const QUOTE_MARKS: Record<string, string> = { "“": "\"", "”": "\"", "「": "\"", "」": "\"", "‘": "'", "’": "'" };
 // Shorter normalized quotes are too likely to match by accident.
 const MIN_REPAIRED_QUOTE = 8;
+// A corrected claim is "the same claim" when this share of the shorter text's trigrams recurs;
+// on stored corrections 0.8 matched near-identical rewordings without pairing different claims.
+const SAME_CLAIM = 0.8;
+// A restored option must share at least this many consecutive characters with the previous quote.
+const MIN_OPTION_OVERLAP = 20;
 // Bounds the correction prompt; long evidence is split into many quote options.
 const MAX_ANCHORED_QUOTES = 20;
 
@@ -88,4 +99,72 @@ export function claimAnchors(previous: TopicDraft, catalog: readonly CorrectionE
     return item ? [{ claimIndex, evidenceId: item.id,
       quoteIds: item.quoteOptions.slice(0, MAX_ANCHORED_QUOTES).map(option => option.quoteId) }] : [];
   });
+}
+
+/** What a correction is checked against: the batch evidence, its quote options, and the previous review. */
+export interface PreservationContext {
+  evidence: readonly FlowEvidence[];
+  catalog: readonly CorrectionEvidence[];
+  /** Previous claim indexes the review did not accept; their evidence may legitimately change. */
+  disputed: ReadonlySet<number>;
+}
+
+/** Restore each corrected claim to the evidence it cited before, when it is clearly the same, undisputed claim. */
+export function preserveEvidence(corrected: TopicDraft, previous: TopicDraft, context: PreservationContext): TopicDraft {
+  return { ...corrected, claims: corrected.claims.map(claim => {
+    const index = sameClaim(claim, previous.claims);
+    const before = index === undefined || context.disputed.has(index) ? undefined : previous.claims[index];
+    const source = before ? context.evidence.find(item => item.id === before.evidenceId) : undefined;
+    if (!before || !source || before.evidenceId === claim.evidenceId) return claim;
+    const quote = source.text.includes(before.quote) ? before.quote : bestOption(context.catalog, before);
+    return quote ? { ...claim, evidenceId: before.evidenceId, quote } : claim;
+  }) };
+}
+
+/** Index of the only previous claim whose text is nearly the same; none when there are zero or several. */
+function sameClaim(claim: FlowClaim, previous: readonly FlowClaim[]): number | undefined {
+  const matches = previous.flatMap((item, index) => similarity(item.text, claim.text) >= SAME_CLAIM ? [index] : []);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function similarity(left: string, right: string): number {
+  const a = trigrams(left);
+  const b = trigrams(right);
+  if (!a.size || !b.size) return normalized(left).value === normalized(right).value ? 1 : 0;
+  let shared = 0;
+  for (const gram of a) if (b.has(gram)) shared += 1;
+  return shared / Math.min(a.size, b.size);
+}
+
+function trigrams(text: string): Set<string> {
+  const value = normalized(text).value;
+  const grams = new Set<string>();
+  for (let index = 0; index + 3 <= value.length; index += 1) grams.add(value.slice(index, index + 3));
+  return grams;
+}
+
+/** The option of the previous evidence that shares the longest run of characters with its quote. */
+function bestOption(catalog: readonly CorrectionEvidence[], before: FlowClaim): string | null {
+  const options = catalog.find(item => item.id === before.evidenceId)?.quoteOptions ?? [];
+  let best: { quoteId: string; score: number } | null = null;
+  for (const option of options) {
+    const score = longestCommonRun(option.quote, before.quote);
+    if (score >= MIN_OPTION_OVERLAP && (!best || score > best.score)) best = { quoteId: option.quoteId, score };
+  }
+  return best ? resolveQuote(catalog, best.quoteId).quote : null;
+}
+
+function longestCommonRun(left: string, right: string): number {
+  let best = 0;
+  const row = new Array<number>(right.length + 1).fill(0);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = 0;
+    for (let j = 1; j <= right.length; j += 1) {
+      const above = row[j];
+      row[j] = left[i - 1] === right[j - 1] ? diagonal + 1 : 0;
+      if (row[j] > best) best = row[j];
+      diagonal = above;
+    }
+  }
+  return best;
 }
