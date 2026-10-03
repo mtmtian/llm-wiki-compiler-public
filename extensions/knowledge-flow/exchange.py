@@ -308,7 +308,7 @@ def announce_machine(config, at):
               "publishEnabled": bool(config.get("publishEnabled")), "checkedAt": at}
     if exchange.get("protocolVersion") != 2:
         status["publisherMachineId"] = exchange["publisherMachineId"]
-    from semantic_scope import runtime_manifest
+    from capability_gate import runtime_manifest
     manifest = runtime_manifest(config)
     status["runtimeCommit"] = manifest.get("commit")
     status["capabilities"] = manifest.get("capabilities", [])

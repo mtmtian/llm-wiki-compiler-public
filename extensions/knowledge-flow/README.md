@@ -99,7 +99,7 @@ effective scope on every upgraded host; a local configuration flag cannot enable
 Reader readiness is checked again before semantic processing/publication and active sync.
 Old readers can omit unknown records, so their announcements must never be fabricated.
 
-Runtimes that can read ledger records (publication version 3, `deployment/KNOWLEDGE-LEDGER.md` §7) also advertise `knowledge-ledger-v1`. Ledger records never become page text: replica sync accepts them, page replay and topic migration skip them, and only the current-decisions digest reads them. No runtime produces them yet; producing them will require every participant to advertise this capability.
+Runtimes that can read ledger records (publication version 3, `deployment/KNOWLEDGE-LEDGER.md` §7) also advertise `knowledge-ledger-v1`. Ledger records never become page text: replica sync accepts them, page replay and topic migration skip them, and only the current-decisions digest reads them. Producing them requires every participant to advertise this capability and one operator to write the shared policy `v2/knowledge-ledger.json`: preview with `llmwiki-maintain --knowledge-ledger enable`, apply with `--apply`, and inspect with `--knowledge-ledger status`. The ledger gate is independent of semantic topics and cannot be disabled once records exist, because readers must keep reading them.
 
 Only newly captured session jobs receive this contract. Frozen older jobs and review
 retries remain project scoped; the queue never mixes the two contracts. Semantic jobs
