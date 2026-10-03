@@ -258,13 +258,16 @@ def _validate_merge(item: Any, records: dict[str, dict[str, Any]], reserved: set
 
 def validate_topic_merges(value: Any, records: list[dict[str, Any]],
                           migration: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Validate reviewed merges of revision-layer pages; pages owned by the legacy migration stay out."""
+    """Validate reviewed merges of topic pages; pages the legacy migration folded away or retired stay out.
+
+    A migration target is an ordinary page once the migration has rendered it, so a merge may keep or remove it.
+    """
     if not isinstance(value, list) or not value or len(value) > MAX_MERGES:
         raise ValueError("topic merges are invalid")
     known = {item.get("id"): item for item in records if isinstance(item, dict)}
     reserved: set[str] = set()
     for page in (migration or {}).get("pages", []):
-        reserved.update([page["pageId"], *(entry["pageId"] for entry in page["previousPages"])])
+        reserved.update(entry["pageId"] for entry in page["previousPages"] if entry["pageId"] != page["pageId"])
     reserved.update(page["pageId"] for page in (migration or {}).get("retiredPages", []))
     merges = [_validate_merge(item, known, reserved) for item in value]
     return sorted(merges, key=lambda item: item["pageId"])

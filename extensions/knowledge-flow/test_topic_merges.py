@@ -2,7 +2,8 @@
 
 A merge names a surviving page among at least two revision-layer pages, the records it absorbed and
 the reviewed body. The manifest is validated strictly before a generation can switch; old runtimes
-reject version 3, so a merge can never be half understood. Pages the legacy migration owns stay out.
+reject version 3, so a merge can never be half understood. Pages the legacy migration folded away or retired
+stay out; a page the migration rendered may be merged like any other.
 """
 
 from __future__ import annotations
@@ -41,6 +42,14 @@ def merge(**overrides) -> dict:
     return value
 
 
+def migration_of(target: str, previous: str) -> dict:
+    """A one-time legacy migration rendering `target` from the baseline page `previous`."""
+    return {"version": 1, "basisRecordIds": ["1" * 64], "pages": [{
+        "projectId": "project", "projectLabel": "Project", "pageId": target, "topicId": "f" * 64,
+        "title": "旧页", "topic": "旧主题", "decisionObject": "旧对象", "body": "旧正文",
+        "previousPages": [{"pageId": previous, "sha256": "e" * 64}]}]}
+
+
 def manifest(merges, **extra) -> dict:
     value = {"version": 3, "baselineId": BASELINE, "reviewedAt": "2026-10-04T00:00:00Z", "groups": [], "merges": merges}
     value.update(extra)
@@ -52,7 +61,7 @@ def decode(value: dict) -> dict:
 
 
 class TopicMergeManifestTests(unittest.TestCase):
-    """Merges must be strict, canonical inputs that never overlap the legacy migration."""
+    """Merges must be strict, canonical inputs that never touch pages the legacy migration removed."""
 
     def test_valid_merge_is_normalized(self):
         """Given a version 3 manifest, When decoded, Then its merge is canonical and no migration is implied."""
@@ -82,14 +91,28 @@ class TopicMergeManifestTests(unittest.TestCase):
             with self.subTest(name), self.assertRaises(ValueError):
                 decode(value)
 
-    def test_legacy_migration_pages_cannot_be_merged(self):
-        """Given a page the legacy migration owns, When a merge includes it, Then the manifest is rejected."""
-        migration = {"version": 1, "basisRecordIds": ["1" * 64], "pages": [{
-            "projectId": "project", "projectLabel": "Project", "pageId": "concepts/legacy", "topicId": "f" * 64,
-            "title": "旧页", "topic": "旧主题", "decisionObject": "旧对象", "body": "旧正文",
-            "previousPages": [{"pageId": BETA, "sha256": "e" * 64}]}]}
-        with self.assertRaisesRegex(ValueError, "topic merge pages are invalid"):
-            decode(manifest([merge()], migration=migration))
+    def test_pages_the_migration_folded_away_or_retired_cannot_be_merged(self):
+        """Given a page the legacy migration removed or retired, When a merge includes it, Then the manifest is rejected."""
+        folded = migration_of("concepts/legacy", BETA)
+        retired = {**migration_of("concepts/legacy", "concepts/old"), "retiredPages": [{
+            "projectId": "project", "pageId": BETA, "sha256": "e" * 64, "reason": "过程记录已归档",
+            "externalReference": "https://example.com/archive/1"}]}
+        for name, value in {"folded into a target": folded, "retired": retired}.items():
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "topic merge pages are invalid"):
+                decode(manifest([merge()], migration=value))
+
+    def test_migration_target_pages_can_be_merged(self):
+        """Given a page the legacy migration rendered, When a merge keeps or removes it, Then the manifest is valid."""
+        for target in (ALPHA, BETA):
+            with self.subTest(target):
+                decoded = decode(manifest([merge()], migration=migration_of(target, "concepts/old")))
+                self.assertEqual(decoded["topicMerges"][0]["pageId"], ALPHA)
+
+    def test_merged_away_migration_page_receives_a_tombstone(self):
+        """Given a merge that removes a migration target present in the baseline, Then the shared vault retires it."""
+        baseline = {f"wiki/{ALPHA}.md": b"alpha", f"wiki/{BETA}.md": b"beta"}
+        config = {"topicMigration": migration_of(BETA, "concepts/old"), "topicMerges": [merge()]}
+        self.assertEqual(desired_retirement(config, baseline, {f"wiki/{ALPHA}.md": b"merged"}), {f"wiki/{BETA}.md"})
 
     def test_routing_identity_changes_only_with_merges(self):
         """Given no merges, Then the generation identity is unchanged; a merge changes it."""

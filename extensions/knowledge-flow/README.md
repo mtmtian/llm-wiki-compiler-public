@@ -183,8 +183,10 @@ merged page plus the absorbed records, then checks that each previous page has e
 replaces the survivor with the reviewed body (a semantic page whose provenance is the union of the previous
 pages; every previous citation must stay or be retired), removes the other pages and rewrites their links,
 and finally applies the remaining records to the merged page. A later record that still revises a removed
-page is held. Any drift fails the generation closed. Pages the legacy migration owns cannot be merged, and
-a removed baseline page receives the same shared-vault tombstone as a migration. Every machine must run a
+page is held. Any drift fails the generation closed. A page the legacy migration rendered can be merged
+like any other, because the migration runs before the merges on every replay; the pages it folded away or
+retired cannot. A removed baseline page, including a removed migration page, receives the same shared-vault
+tombstone as a migration. Every machine must run a
 runtime that understands version 3 before the manifest is activated; an older runtime rejects it and keeps
 its previous view.
 
