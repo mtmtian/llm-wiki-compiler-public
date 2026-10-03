@@ -46,6 +46,14 @@ def hook_command(launcher: Path, config_path: Path) -> str:
     return shlex.join([str(launcher), "--config", str(config_path)])
 
 
+def _config_worker(py: str) -> str:
+    """Shell line setting WORKER from $CONFIG, the private record of the installed runtime.
+
+    Shared by the stable launchers so they resolve the runtime the same way.
+    """
+    return f"WORKER=\"$({py} -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"worker\"])' \"$CONFIG\")\""
+
+
 def render_codex_hook(python: str) -> str:
     """Render the launcher that runs hooks.py of the runtime named by the config's worker.
 
@@ -56,7 +64,7 @@ def render_codex_hook(python: str) -> str:
     return "\n".join(("#!/bin/sh", "set -eu",
         '[ "$#" -eq 2 ] && [ "$1" = --config ] || { echo "usage: llmwiki-codex-hook --config PATH" >&2; exit 64; }',
         'CONFIG="$2"',
-        f"WORKER=\"$({py} -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"worker\"])' \"$CONFIG\")\"",
+        _config_worker(py),
         f"exec {py} \"$(dirname \"$WORKER\")/hooks.py\" --config \"$CONFIG\"", ""))
 
 
@@ -96,7 +104,7 @@ def render_maintenance(config_path: Path, python: str) -> str:
     """Render a maintenance launcher following the configured runtime."""
     py, cfg = shlex.quote(python), shlex.quote(str(config_path))
     return "\n".join(("#!/bin/sh", "set -eu", f"CONFIG={cfg}",
-        f"WORKER=\"$({py} -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"worker\"])' \"$CONFIG\")\"",
+        _config_worker(py),
         f"exec {py} \"$(dirname \"$WORKER\")/maintenance.py\" --config \"$CONFIG\" \"$@\"", ""))
 
 
