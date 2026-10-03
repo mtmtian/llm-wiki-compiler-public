@@ -23,8 +23,8 @@ from install_roles import (MACHINE_ID_PATTERN, configure_roles, validate_runtime
 from install_events import (directories_to_create, event_enabled, event_paths, event_plan,
                             launchctl_action, remove_owned_files)
 from install_scope import migrate_repository_exclusions
-from install_helpers import (hook_command, load_inputs, needs_update, own_hook, redact,
-                             render_alma_session, render_launcher, render_local, render_maintenance,
+from install_helpers import (CODEX_HOOK_LAUNCHER, hook_command, load_inputs, needs_update, own_hook, redact,
+                             render_alma_session, render_codex_hook, render_launcher, render_local, render_maintenance,
                              select_wiki, validate_runtime as _validate_runtime, write_plan as _write_plan)
 
 
@@ -305,7 +305,7 @@ def output_plan(config: dict[str, Any], environment: dict[str, str],
                 runtime: Path, node: str, config_path: Path, hooks: dict[str, Any], home: Path) -> list[tuple[Path, str, int]]:
     """Render every private output in memory before staging or replacing files."""
     hooks_path = home / ".codex/hooks.json"
-    command = hook_command(runtime, config_path, sys.executable)
+    command = hook_command(home / CODEX_HOOK_LAUNCHER, config_path)
     outputs = {
         config_path: (json.dumps(config, ensure_ascii=False, indent=2) + "\n", 0o600),
         home / ".config/llmwiki/icloud-wiki.sh": (render_launcher(
@@ -315,6 +315,7 @@ def output_plan(config: dict[str, Any], environment: dict[str, str],
             isinstance(config.get("exchange"), dict) and config["exchange"].get("protocolVersion", 1) == 2), 0o700),
         home / ".local/bin/llmwiki-maintain": (render_maintenance(config_path, sys.executable), 0o700),
         home / ".local/bin/llmwiki-alma-session": (render_alma_session(runtime, config_path, sys.executable), 0o700),
+        home / CODEX_HOOK_LAUNCHER: (render_codex_hook(sys.executable), 0o700),
         hooks_path: (json.dumps(build_hooks_for_config(hooks, command, config_path), ensure_ascii=False, indent=2) + "\n", 0o600),
     }
     if event_enabled(config):

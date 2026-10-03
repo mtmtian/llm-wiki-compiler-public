@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from argparse import Namespace
@@ -425,7 +427,7 @@ class InstallerTests(unittest.TestCase):
         config_path = self.config_path()
         config_path.parent.mkdir(parents=True)
         config_path.write_text(json.dumps({"version": 1, "enabled": True, "projects": {}}), encoding="utf-8")
-        command = install.hook_command(self.runtime, config_path)
+        command = shlex.join([sys.executable, str(self.runtime / "knowledge-flow/hooks.py"), "--config", str(config_path)])
         hooks_path = self.home / ".codex/hooks.json"
         hooks_path.parent.mkdir(parents=True, exist_ok=True)
         hooks_path.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}}), encoding="utf-8")
