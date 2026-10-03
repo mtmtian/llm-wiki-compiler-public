@@ -36,6 +36,10 @@ CACHE_RECORD_DIR = Path("replica-records")
 ERROR_DIR = Path("replica-errors")
 
 
+class PublicationContractError(ValueError):
+    """The result's own content breaks the publication contract; retrying it cannot succeed."""
+
+
 def _now() -> str:
     return _datetime.datetime.now(_datetime.timezone.utc).isoformat()
 
@@ -366,6 +370,25 @@ def _shared_evidence(items: list[Any], machine: str) -> list[dict[str, Any]]:
     return shared
 
 
+def _contract_packet(config: dict[str, Any], job: dict[str, Any], result: dict[str, Any],
+                     baseline_id: str) -> tuple[dict[str, Any], bytes]:
+    """Build and validate the packet from the frozen result alone.
+
+    Nothing here reads shared state, so a failure means this result can never be
+    published; it is reported as ``PublicationContractError`` rather than retried.
+    """
+    try:
+        payload = _publication_payload(config, job, result, baseline_id)
+        packet = {"id": digest(canonical(payload)), "payload": payload}
+        validate_packet(packet, config["machineId"], baseline_id)
+    except (ValueError, KeyError, TypeError) as error:
+        raise PublicationContractError(str(error)) from error
+    encoded = (canonical(packet) + "\n").encode("utf-8")
+    if len(encoded) > MAX_PACKET_BYTES:
+        raise PublicationContractError("publication packet exceeds 128 KiB")
+    return packet, encoded
+
+
 def publish_record(config: dict[str, Any], job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     """Publish one reviewed record from any declared machine, idempotently."""
     validate_config(config)
@@ -376,14 +399,10 @@ def publish_record(config: dict[str, Any], job: dict[str, Any], result: dict[str
     if not config.get("publishEnabled"):
         raise ValueError("publication is disabled on this machine")
     baseline = _read_baseline_cached(config)
-    payload = _publication_payload(config, job, result, baseline["snapshotId"])
+    packet, encoded = _contract_packet(config, job, result, baseline["snapshotId"])
+    payload = packet["payload"]
     if not _project_is_allowed(payload, config):
         raise ValueError("publication project is not allowed")
-    packet = {"id": digest(canonical(payload)), "payload": payload}
-    validate_packet(packet, config["machineId"], baseline["snapshotId"])
-    encoded = (canonical(packet) + "\n").encode("utf-8")
-    if len(encoded) > MAX_PACKET_BYTES:
-        raise ValueError("publication packet exceeds 128 KiB")
     root = Path(config["exchange"]["root"])
     relative = f"v2/publications/{config['machineId']}/{packet['id']}.json"
     with SharedFiles(root) as exchange:
