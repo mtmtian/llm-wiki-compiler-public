@@ -7,7 +7,8 @@ import type { TopicRevision } from "./topic-revision-types.js";
 export function quoteContribution(job: FlowJob, claims: FlowClaim[], revisions?: TopicRevision[]): NonNullable<FlowResult["contribution"]> {
   const evidence: FlowEvidence[] = [];
   const narrow = (reference: { evidenceId: string; quote: string }) => {
-    const source = job.evidence.find(item => item.id === reference.evidenceId)!;
+    // origin only guides the prompts; published evidence keeps the canonical shape.
+    const { origin: _origin, ...source } = job.evidence.find(item => item.id === reference.evidenceId)!;
     const existing = evidence.find(item => item.text === reference.quote && item.locator === source.locator && item.kind === source.kind);
     if (existing) return { evidenceId: existing.id, quote: reference.quote };
     const item = { ...source, id: `quote-${evidence.length}`, text: reference.quote,
