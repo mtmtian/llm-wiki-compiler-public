@@ -62,6 +62,7 @@ Each reviewed revision contains `pageId`, stable `topicId`, title/topic/object,
 the complete previous page `basisHash` (null for creation), Markdown `body`, and
 `claimIndexes`. Draft placeholders `{{claim:N}}` become exact quote citations.
 Every evidence item shown to the planner, editor and reviewer is marked `origin: current` (the turns being consolidated) or `origin: earlier` (session context). The editor chooses each claim's primary quote first and restates only what that quote says, citing earlier evidence as primary only when it states the claim; the marker is prompt-only and never appears in published evidence.
+The editor receives each existing page's `citationChecklist` and must keep or retire every listed marker; a new page may not contain `^[...]` markers. Before validation, `citation-repair.ts` deterministically restores provenance the draft visibly kept: it unwraps `^[{{claim:N}}]`, swaps a renumbered or merged marker back to the dropped original markers of the same file it covers, and gives a line kept verbatim its original markers back. Retired markers are never restored, and anything it cannot prove still reaches the strict citation validator; a correction is told which markers were dropped, invented, or retired outside the page's basis.
 The independent reviewer can accept an explicit user change while preserving useful
 prior rationale, constraints and counterexamples. It holds unresolved conflicts and uncertain
 intent. Multi-turn approvals retain both original proposal and approval quotes.
