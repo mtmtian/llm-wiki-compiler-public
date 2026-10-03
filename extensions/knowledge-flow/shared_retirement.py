@@ -1,8 +1,9 @@
 """Track explicitly reviewed baseline-page retirement separately from content ownership.
 
-An absent generated page ordinarily restores its baseline. A reviewed merge is
-different: its tombstone survives retries, and removing the migration restores
-the original page while still protecting any human-created replacement.
+An absent generated page ordinarily restores its baseline. A reviewed merge (the
+legacy migration or a topic merge) is different: its tombstone survives retries,
+and removing it restores the original page while still protecting any
+human-created replacement.
 """
 from typing import Any
 
@@ -22,11 +23,11 @@ def retired_baseline(value: Any, baseline: dict[str, bytes]) -> set[str]:
 
 
 def desired_retirement(config: dict[str, Any], baseline: dict[str, bytes], projection: dict[str, bytes]) -> set[str]:
-    """Only the validated migration's removed baseline pages receive tombstones."""
-    migration = config.get("topicMigration")
-    if migration is None:
+    """Only baseline pages removed by the validated migration or a reviewed merge receive tombstones."""
+    migration = config.get("topicMigration") or {}
+    pages = [*migration.get("pages", []), *(config.get("topicMerges") or [])]
+    if not pages and not migration.get("retiredPages"):
         return set()
-    pages = migration.get("pages", [])
     destinations = {"wiki/" + page["pageId"] + ".md" for page in pages}
     old = {"wiki/" + prior["pageId"] + ".md" for page in pages for prior in page["previousPages"]}
     old.update("wiki/" + page["pageId"] + ".md" for page in migration.get("retiredPages", []))

@@ -10,7 +10,7 @@ import { generateIndex, scanWikiPages } from "../../src/compiler/indexgen.js";
 import { acquireLock, releaseLock } from "../../src/utils/lock.js";
 import { refreshEmbeddingsDrainingPending } from "../../src/utils/embeddings-refresh.js";
 import { qualifiedPageId } from "../../src/utils/page-id.js";
-import { atomicWrite, extractCitations, parseFrontmatter } from "../../src/utils/markdown.js";
+import { atomicWrite, parseFrontmatter } from "../../src/utils/markdown.js";
 import { readState, writeState } from "../../src/utils/state.js";
 import { confineUnderRoot } from "../../src/utils/path-confine.js";
 import { writeCandidate, listCandidates, deleteCandidate } from "../../src/compiler/candidates.js";
@@ -18,17 +18,18 @@ import { applyCandidateUnderLock } from "../../src/commands/review-approve.js";
 import { sha256Text } from "../../src/connectors/hash.js";
 import { entryConflicts, planTopicPages, publicationEntries } from "./materialize-plan.js";
 import { canonicalTopicRoutes, routePublicationEntries } from "./topic-routes.js";
-import { renderPublicationSources, renderTopicPage, renderTopicRevisionPage } from "./materialize-render.js";
+import { renderPublicationSources, renderTopicPage } from "./materialize-render.js";
 import type { PublicationSource } from "./materialize-render.js";
 import type { FlowConfig } from "./types.js";
 import type { PublicationConflict, PublicationEntry, PublicationRecord, TopicPage } from "./publication-types.js";
 import type { SourceState } from "../../src/utils/types.js";
-import { planTopicRevisions, revisionBasisMatches, revisionEntries, validateTopicRevisionRecord } from "./topic-revision.js";
+import { planTopicRevisions, revisionEntries, validateTopicRevisionRecord } from "./topic-revision.js";
+import { replayRevisions } from "./materialize-revisions.js";
+import type { RenderedRevision, RevisionReplay } from "./materialize-revisions.js";
 import { applyTopicMigration, projectOwners } from "./topic-migration.js";
 import { generateProjectNavigation } from "./topic-navigation.js";
-import { validateCitationChanges, validateRetirementReferences } from "./citation-retirement.js";
+import { rewriteBody, rewritePageLinks } from "./page-links.js";
 import { existingSourceNames, pruneRetiredSources, validateRetiredPageLinks } from "./retirement-projection.js";
-import { readPriorSources } from "./consolidation-sources.js";
 import {
   createRetirementReceipt,
   matchesRetirementReceipt,
@@ -40,7 +41,6 @@ import type { RetirementReceipt } from "./retirement-receipt.js";
 const MAX_TOPIC_PAGE_CHARS = 12_000;
 
 type RenderedTopic = { page: TopicPage; body: string };
-type RenderedRevision = { item: ReturnType<typeof planTopicRevisions>["applications"][number]; body: string };
 interface LegacyProjection {
   basisPlan: ReturnType<typeof planTopicPages>;
   extraPlan: ReturnType<typeof planTopicPages>;
@@ -90,21 +90,22 @@ export async function materializeRecords(config: FlowConfig, records: Publicatio
     if ((await listCandidates(config.wikiRoot)).length) throw new Error("local materialization has pending candidates");
     const legacy = prepareLegacyProjection(config, entries, records, existing, retirementReceipt);
     validateRevisionProjectOwnership(config, records, legacy.desired);
-    const revisions = planTopicRevisions(records, legacy.desired);
-    const revisionRendered = await renderRevisions(revisions.applications, legacy.desired, legacy.sources, revisions.conflicts, config.wikiRoot);
-    rewritePageLinks(legacy.desired, legacy.migrationLinks);
-    const finalRevisionRendered = revisionRendered.map(item => ({ ...item, body: rewriteBody(item.body, legacy.migrationLinks) }));
+    const replay = await replayRevisions(config, records, legacy.desired, legacy.sources);
+    const links = new Map([...legacy.migrationLinks, ...replay.merges.links]);
+    rewritePageLinks(legacy.desired, links);
+    const rendered = withLinks(replay, links);
     await validateRetiredPageLinks(config.wikiRoot, legacy.desired, config.topicMigration?.retiredPages?.map(page => page.pageId) ?? []);
-    await persistProjection(config, legacy, finalRevisionRendered);
+    await persistProjection(config, legacy, rendered, links);
     const persisted = await persistedSources(config.wikiRoot, legacy.sources);
     await pruneRetiredSources(config.wikiRoot, [...legacy.migration.retiredCitations,
       ...legacy.migrationPages.flatMap(page => page.citationRetirements ?? []),
-      ...finalRevisionRendered.flatMap(item => item.item.revision.citationRetirements ?? [])], persisted, protectedSources);
+      ...(config.topicMerges ?? []).flatMap(merge => merge.citationRetirements ?? []),
+      ...[...rendered.earlier, ...rendered.later].flatMap(item => item.item.revision.citationRetirements ?? [])], persisted, protectedSources);
     await rebuildLocalIndexes(config);
     await writeRetirementReceipt(config.wikiRoot,
       retirementReceipt ?? createRetirementReceipt(inputHash, config.topicMigration, legacy.basisPlan.pages));
     const pages = (await readdir(path.join(config.wikiRoot, "wiki/concepts"))).filter(name => name.endsWith(".md")).length;
-    return { pages, conflicts: [...legacy.basisPlan.conflicts, ...legacy.extraPlan.conflicts, ...legacy.migration.conflicts, ...revisions.conflicts] };
+    return { pages, conflicts: [...legacy.basisPlan.conflicts, ...legacy.extraPlan.conflicts, ...legacy.migration.conflicts, ...replay.conflicts] };
   } finally { await releaseLock(config.wikiRoot); }
 }
 
@@ -160,12 +161,30 @@ function applyMigrationStage(config: FlowConfig, basisRendered: RenderedTopic[],
   return { desired, migration, migrationLinks, blockedLegacy: new Set(migration.conflicts.flatMap(conflict => conflict.recordIds)) };
 }
 
-async function persistProjection(config: FlowConfig, legacy: LegacyProjection, revisions: RenderedRevision[]): Promise<void> {
-  await writeAcceptedSources(config.wikiRoot, legacy, revisions);
+/** Rendered output with every moved page's links pointing at its survivor, in promotion order. */
+function withLinks(replay: RevisionReplay, links: ReadonlyMap<string, string>): RevisionReplay {
+  const rewrite = (items: RenderedRevision[]) => items.map(item => ({ ...item, body: rewriteBody(item.body, links) }));
+  return { ...replay, earlier: rewrite(replay.earlier), later: rewrite(replay.later),
+    merged: replay.merged.map(page => ({ ...page, body: rewriteBody(page.body, links) })) };
+}
+
+async function persistProjection(config: FlowConfig, legacy: LegacyProjection, rendered: RevisionReplay, links: ReadonlyMap<string, string>): Promise<void> {
+  await writeAcceptedSources(config.wikiRoot, legacy, [...rendered.earlier, ...rendered.later]);
   await promoteTopics(config.wikiRoot, legacy);
   await promoteMigration(config, legacy);
-  await promoteRevisions(config.wikiRoot, legacy.sources, revisions);
-  await migrateSourceOwnership(config.wikiRoot, legacy.migrationLinks, config.topicMigration?.retiredPages?.map(page => page.pageId) ?? []);
+  await promoteRevisions(config.wikiRoot, legacy.sources, rendered.earlier);
+  await promoteMerges(config.wikiRoot, rendered);
+  await promoteRevisions(config.wikiRoot, legacy.sources, rendered.later);
+  await migrateSourceOwnership(config.wikiRoot, links, config.topicMigration?.retiredPages?.map(page => page.pageId) ?? []);
+}
+
+/** Write each merged page, then remove the pages it absorbed; the generation is private and freshly staged. */
+async function promoteMerges(root: string, rendered: RevisionReplay): Promise<void> {
+  for (const page of rendered.merged) await promoteMigrationPage(root, page.pageId, page.body);
+  for (const page of rendered.merges.removed) {
+    const relative = path.join("wiki", `${page.pageId}.md`);
+    if (await readOptional(root, relative) !== null) await unlink(await confineUnderRoot(relative, root, { mustExist: true }));
+  }
 }
 
 /** Keep incremental compilation and frozen-page protection on the reviewed canonical paths. */
@@ -224,21 +243,6 @@ function migrationLinkMap(pages: Array<{ pageId: string; previousPages: Array<{ 
   return links;
 }
 
-function rewritePageLinks(pages: Map<string, string>, links: ReadonlyMap<string, string>): void {
-  for (const [id, body] of pages) pages.set(id, rewriteBody(body, links));
-}
-
-function rewriteBody(body: string, links: ReadonlyMap<string, string>): string {
-  let result = body;
-  for (const [previous, target] of links) {
-    const oldSlug = previous.slice("concepts/".length); const newSlug = target.slice("concepts/".length);
-    for (const [from, to] of [[previous, target], [oldSlug, newSlug]]) {
-      result = result.replaceAll(`[[${from}]]`, `[[${to}]]`).replaceAll(`[[${from}|`, `[[${to}|`);
-    }
-  }
-  return result;
-}
-
 function validateRevisionProjectOwnership(config: FlowConfig, records: PublicationRecord[], pages: ReadonlyMap<string, string>): void {
   for (const record of records) for (const revision of record.payload.topicRevisions ?? []) {
     validateRevisionOwner(config, record, revision.pageId, revision.topicScope, pages);
@@ -255,63 +259,6 @@ function validateRevisionOwner(config: FlowConfig, record: PublicationRecord, pa
   if (owners.length > 1 || owners.length === 1 && owners[0] !== record.payload.projectId) throw new Error("topic revision page is outside project ownership");
 }
 
-async function renderRevisions(applications: ReturnType<typeof planTopicRevisions>["applications"], desired: Map<string, string>,
-  sources: ReadonlyMap<string, PublicationSource>, conflicts: PublicationConflict[], wikiRoot: string): Promise<Array<{ item: (typeof applications)[number]; body: string }>> {
-  const rendered: Array<{ item: (typeof applications)[number]; body: string }> = [];
-  const held = new Set(conflicts.flatMap(conflict => conflict.recordIds));
-  const groups = new Map<string, typeof applications>();
-  for (const item of applications) groups.set(item.record.id, [...(groups.get(item.record.id) ?? []), item]);
-  for (const group of groups.values()) {
-    const record = group[0].record;
-    if (record.payload.basisRecordIds.some(id => held.has(id))) { holdRevisionGroup(group, conflicts, held, "revision depends on a held record"); continue; }
-    const tentative = new Map(desired); const batch: Array<{ item: (typeof applications)[number]; body: string }> = [];
-    if (group.some(item => !revisionBasisMatches(item.revision.basisHash, tentative.get(item.revision.pageId)))) {
-      holdRevisionGroup(group, conflicts, held, "revision basis hash does not match current page"); continue;
-    }
-    const initial = new Map(tentative);
-    const priorSources = await retirementSourcesForGroup(group, initial, sources, wikiRoot);
-    for (const item of group) {
-      const previous = tentative.get(item.revision.pageId);
-      const body = renderReviewedRevision(item, previous, sources, priorSources);
-      batch.push({ item: { ...item, previous }, body }); tentative.set(item.revision.pageId, body);
-    }
-    rendered.push(...batch); for (const item of batch) desired.set(item.item.revision.pageId, item.body);
-  }
-  return rendered;
-}
-
-async function retirementSourcesForGroup(group: ReturnType<typeof planTopicRevisions>["applications"], initial: ReadonlyMap<string, string>,
-  sources: ReadonlyMap<string, PublicationSource>, wikiRoot: string): Promise<ReadonlyMap<string, string>> {
-  if (!group.some(item => (item.revision.citationRetirements ?? []).some(retirement => retirement.replacement.startsWith("https:")))) {
-    return new Map();
-  }
-  const names = [...new Set(group.flatMap(item => extractCitations(parseFrontmatter(initial.get(item.revision.pageId) ?? "").body)))];
-  const generated = new Map([...sources.values()].filter(source => names.includes(source.name)).map(source => [source.name, source.content]));
-  const missing = names.filter(name => !generated.has(name));
-  for (const [name, content] of Object.entries(await readPriorSources(wikiRoot, missing))) generated.set(name, content);
-  return generated;
-}
-
-function renderReviewedRevision(item: ReturnType<typeof planTopicRevisions>["applications"][number], previous: string | undefined,
-  sources: ReadonlyMap<string, PublicationSource>, priorSources: ReadonlyMap<string, string>): string {
-  const source = sources.get(item.record.id)!; const { revision } = item;
-  const retirements = revision.citationRetirements ?? [];
-  if (retirements.some(item => item.replacement.startsWith("https:"))) {
-    validateRetirementReferences(retirements, [previous ?? "", ...item.record.payload.evidence.map(evidence => evidence.text),
-      ...priorSources.values()]);
-  }
-  const body = renderTopicRevisionPage(revision, item.record, previous, source, sources);
-  const resolvedRetirements = revision.citationRetirements?.map(value => ({ ...value, replacement: value.replacement.replace(
-    /\{\{claim:(\d+)\}\}/g, (_match, index: string) => source.citations.get(`${item.record.id}:${index}`)?.[0] ?? "") }));
-  validateCitationChanges([previous ?? ""], body, resolvedRetirements, { newMarkers: [...source.citations.values()].flat() });
-  return body;
-}
-
-function holdRevisionGroup(group: ReturnType<typeof planTopicRevisions>["applications"], conflicts: PublicationConflict[], held: Set<string>, reason: string): void {
-  const record = group[0]?.record; if (!record) return; held.add(record.id);
-  conflicts.push({ claimRefs: group.flatMap(item => item.revision.claimIndexes.map(index => `${record.id}:${index}`)).sort(), recordIds: [record.id], reason });
-}
-
 /** Changed inputs require the caller's normal fresh-baseline staging path. */
 async function pinMaterializationInput(config: FlowConfig, records: PublicationRecord[]): Promise<string> {
   const relative = ".llmwiki/materialization-input.json";
@@ -320,7 +267,8 @@ async function pinMaterializationInput(config: FlowConfig, records: PublicationR
     .sort(([left], [right]) => String(left) < String(right) ? -1 : String(left) > String(right) ? 1 : 0);
   const identity = JSON.stringify({ recordIds: records.map(record => record.id).sort(), projects,
     routes: canonicalTopicRoutes(config.topicRoutes ?? []), migration: config.topicMigration ?? null,
-    ...(config.topicScope === "semantic" ? { topicScope: "semantic" } : {}) });
+    ...(config.topicScope === "semantic" ? { topicScope: "semantic" } : {}),
+    ...(config.topicMerges?.length ? { merges: config.topicMerges } : {}) });
   const inputHash = sha256Text(identity);
   const content = JSON.stringify({ hash: inputHash }) + "\n";
   const prior = await readFile(file, "utf8").catch(error => {

@@ -50,3 +50,27 @@ export interface TopicMigration {
   /** Reviewed removal of pure process pages after durable knowledge has been transferred. */
   retiredPages?: TopicPageRetirement[];
 }
+
+/**
+ * One reviewed merge of revision-layer topic pages (topic-merge.ts). The replica replays the absorbed
+ * revision records first, checks that each previous page has exactly the reviewed bytes, replaces the
+ * target with the reviewed body and removes the other pages; later records then apply to the merged page.
+ */
+export interface TopicMerge {
+  /** The surviving page; it must be one of `previousPages`, so its page and topic identity are kept. */
+  pageId: string;
+  title: string;
+  topic: string;
+  decisionObject: string;
+  /** Markdown body without frontmatter; every citation of the previous pages must stay or be retired. */
+  body: string;
+  /** Complete page bytes as rebuilt from the absorbed records. */
+  previousPages: TopicMigrationPreviousPage[];
+  /** Every revision record that touched a previous page before the merge was reviewed. */
+  absorbedRecordIds: string[];
+  /** ISO time of the reviewed merge; it becomes the merged page's updatedAt. */
+  mergedAt: string;
+  /** Why the previous pages are one long-running decision object. */
+  reason: string;
+  citationRetirements?: CitationRetirement[];
+}

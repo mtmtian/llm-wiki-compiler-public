@@ -14,11 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from replica_records import CLAIM_REF, LEDGER_VERSION, canonical, is_hash
-from revision_contract import validate_topic_migration
+from revision_contract import validate_topic_merges, validate_topic_migration
 from shared_files import SharedFiles
 
 ROUTE_PATH = "v2/topic-routes.json"
-MAX_ROUTE_BYTES = 256 * 1024
+# Version 3 carries complete reviewed merge bodies (up to 12,000 characters each).
+MAX_ROUTE_BYTES = 1024 * 1024
 MAX_GROUPS = 1000
 MAX_REFS = 5000
 MAX_TOPIC_LENGTH = 160
@@ -102,18 +103,33 @@ def _validate_group(value: Any, records: dict[str, dict[str, Any]], refs: set[st
             "claimRefs": sorted(normalized_refs)}
 
 
+def _manifest_shape(value: dict[str, Any]) -> None:
+    """Version 1 routes only, version 2 adds the legacy migration, version 3 adds merges (migration optional)."""
+    base = {"version", "baselineId", "reviewedAt", "groups"}
+    shapes = {1: (base,), 2: (base | {"migration"},), 3: (base | {"merges"}, base | {"migration", "merges"})}
+    version = value.get("version")
+    if type(version) is not int or version not in shapes:
+        raise ValueError("topic route manifest fields are invalid")
+    if version == 2 and "migration" not in value:
+        raise ValueError("topic route migration is required")
+    if version == 3 and "merges" not in value:
+        raise ValueError("topic route merges are required")
+    if set(value) not in shapes[version]:
+        raise ValueError("topic route manifest fields are invalid")
+
+
+def _decode_projection(value: dict[str, Any], baseline_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Validate the optional legacy migration and the version 3 merges that must not overlap it."""
+    migration = validate_topic_migration(value["migration"], baseline_id, records) if "migration" in value else None
+    merges = validate_topic_merges(value["merges"], records, migration) if "merges" in value else None
+    return {"topicMigration": migration, "topicMerges": merges}
+
+
 def validate_topic_routes(value: Any, baseline_id: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Validate and canonicalize an optional reviewed route manifest."""
     if not is_hash(baseline_id) or not isinstance(value, dict):
         raise ValueError("topic route manifest is invalid")
-    if (set(value) not in ({"version", "baselineId", "reviewedAt", "groups"},
-                           {"version", "baselineId", "reviewedAt", "groups", "migration"})
-            or type(value.get("version")) is not int or value["version"] not in (1, 2)):
-        raise ValueError("topic route manifest fields are invalid")
-    if value["version"] == 1 and "migration" in value:
-        raise ValueError("topic route manifest fields are invalid")
-    if value["version"] == 2 and "migration" not in value:
-        raise ValueError("topic route migration is required")
+    _manifest_shape(value)
     if value.get("baselineId") != baseline_id:
         raise ValueError("topic route baseline does not match the pinned snapshot")
     _reviewed_at(value.get("reviewedAt"))
@@ -125,23 +141,19 @@ def validate_topic_routes(value: Any, baseline_id: str, records: list[dict[str, 
     normalized = [_validate_group(group, indexed, seen) for group in groups]
     if len(seen) > MAX_REFS:
         raise ValueError("topic route claimRefs exceed the allowed limit")
-    if value["version"] == 2:
-        validate_topic_migration(value["migration"], baseline_id, records)
+    _decode_projection(value, baseline_id, records)
     return sorted(normalized, key=lambda group: (
         group["projectId"], group["topic"], group["decisionObject"], canonical(group["claimRefs"])))
 
 
 def _decode_manifest(encoded: bytes, baseline_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Decode one manifest and return both routes and its optional migration."""
+    """Decode one manifest and return its routes, optional legacy migration and optional merges."""
     try:
         value = json.loads(encoded.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("topic route manifest is not valid UTF-8 JSON") from error
     routes = validate_topic_routes(value, baseline_id, records)
-    migration = None
-    if value.get("version") == 2:
-        migration = validate_topic_migration(value["migration"], baseline_id, records)
-    return {"topicRoutes": routes, "topicMigration": migration}
+    return {"topicRoutes": routes, **_decode_projection(value, baseline_id, records)}
 
 
 def load_topic_projection(config: dict[str, Any], baseline_id: str,
@@ -149,11 +161,11 @@ def load_topic_projection(config: dict[str, Any], baseline_id: str,
     """Read one optional exchange file and pin routes plus full-vault migration."""
     exchange_root = Path(config["exchange"]["root"])
     if not exchange_root.exists() and not exchange_root.is_symlink():
-        return {"topicRoutes": [], "topicMigration": None}
+        return {"topicRoutes": [], "topicMigration": None, "topicMerges": None}
     with SharedFiles(exchange_root) as shared:
         encoded = shared.read(ROUTE_PATH, max_bytes=MAX_ROUTE_BYTES)
     if encoded is None:
-        return {"topicRoutes": [], "topicMigration": None}
+        return {"topicRoutes": [], "topicMigration": None, "topicMerges": None}
     return _decode_manifest(encoded, baseline_id, records)
 
 

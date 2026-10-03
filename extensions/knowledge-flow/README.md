@@ -170,6 +170,24 @@ edits block the shared batch before any file is changed. Unowned legacy fragment
 still require an explicit, hash-checked migration with old-link compatibility;
 upgrading the code alone does not migrate or delete the live vault.
 
+### Reviewed topic merges
+
+Most topic pages are created and revised by whole-page revision records, and every replica generation
+replays all records from the frozen baseline, so the legacy migration below cannot merge them: a removed
+page would be recreated by its own creation record. A version 3 `v2/topic-routes.json` (the legacy
+`migration` stays optional) carries `merges`. Each merge names a surviving `pageId` among at least two
+`previousPages: [{pageId, sha256}]`, the `absorbedRecordIds` that revised those pages, the reviewed
+`title`, `topic`, `decisionObject` and `body`, `mergedAt`, `reason` and optional `citationRetirements`.
+Replay (`topic-merge.ts`, `materialize-revisions.ts`) first applies every record that does not touch a
+merged page plus the absorbed records, then checks that each previous page has exactly its reviewed bytes,
+replaces the survivor with the reviewed body (a semantic page whose provenance is the union of the previous
+pages; every previous citation must stay or be retired), removes the other pages and rewrites their links,
+and finally applies the remaining records to the merged page. A later record that still revises a removed
+page is held. Any drift fails the generation closed. Pages the legacy migration owns cannot be merged, and
+a removed baseline page receives the same shared-vault tombstone as a migration. Every machine must run a
+runtime that understands version 3 before the manifest is activated; an older runtime rejects it and keeps
+its previous view.
+
 ### Reviewed legacy grouping
 
 For a reviewed historical migration, place an optional `v2/topic-routes.json` in
@@ -181,7 +199,7 @@ outside Git. The shared exchange's write permission is its trust boundary.
 The manifest can group only existing legacy claims without `decisionObject`.
 Every reference must be unique and belong to the original project and baseline.
 Unknown records, invalid schema, foreign projects, or symlinks fail the sync while
-retaining the previous active view. Limits are 256 KiB, 1,000 groups and 5,000 refs.
+retaining the previous active view. Limits are 1 MiB, 1,000 groups and 5,000 refs.
 Sync reads one snapshot for both its generation identity and worker input.
 Reordering groups or references does not change the resulting content.
 

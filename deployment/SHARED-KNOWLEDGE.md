@@ -251,6 +251,12 @@ SHA-256、新正文和 claim 索引。副本只重放受审正文，同页并发
 归宿、全部原始引用、导航和链接，再激活这份私有 manifest。所有机器应先升级；旧
 runtime 遇 version 2 会拒绝本次 sync 并保留旧视图，不应继续承担共享 materializer。
 
+由整页修订创建的主题页用 version 3 envelope 的 `merges` 合并（`migration` 可选并保持不变）。
+每个 merge 指定存活页（必须是 `previousPages` 之一）、被吸收的修订记录 `absorbedRecordIds`、
+受审正文、`mergedAt` 与理由。副本先重放被吸收的记录，核对每个旧页字节与 `sha256` 一致后
+写入合并页、删除其余旧页并改写链接，再应用之后的记录；之后仍修订已删除旧页的记录待审。
+同样先在冻结库副本验证，所有机器升级到支持 version 3 的 runtime 后再激活。
+
 已经有 ownership manifest 的共享库用普通 sync 迁移，无需再次运行旧文件认领。
 明确合并的 baseline 页会记录 `retiredBaseline` 并保留备份；移除 migration 时恢复
 原 baseline 页。人工重新创建旧路径会触发冲突，不自动覆盖。baseline 与 publication

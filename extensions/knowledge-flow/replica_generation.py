@@ -43,12 +43,14 @@ def _worker_hash(config: dict[str, Any]) -> str:
 
 
 def _routing_hash(config: dict[str, Any], topic_routes: list[dict[str, Any]],
-                  topic_migration: dict[str, Any] | None = None) -> str:
-    """Baseline page ownership and reviewed routes affect topic routing."""
+                  topic_migration: dict[str, Any] | None = None,
+                  topic_merges: list[dict[str, Any]] | None = None) -> str:
+    """Baseline page ownership, reviewed routes, the migration and merges all shape the projection."""
     projects = {project: sorted(value.get("pages", []))
                 for project, value in config.get("projects", {}).items()}
     return digest(canonical({"projects": projects, "topicRoutes": topic_routes,
                              "topicMigration": topic_migration,
+                             **({"topicMerges": topic_merges} if topic_merges else {}),
                              **({"topicScope": "semantic"} if config.get("topicScope") == "semantic" else {})}))
 
 
@@ -241,12 +243,15 @@ def _sync_locked(config: dict[str, Any], state: Path, replica: Path, generations
         projection = load_topic_projection(config, baseline["snapshotId"], records)
         topic_routes = projection["topicRoutes"]
         topic_migration = projection.get("topicMigration")
+        topic_merges = projection.get("topicMerges")
         runtime_config = copy.deepcopy(config)
         runtime_config["topicRoutes"] = topic_routes
         if topic_migration is not None:
             runtime_config["topicMigration"] = copy.deepcopy(topic_migration)
+        if topic_merges is not None:
+            runtime_config["topicMerges"] = copy.deepcopy(topic_merges)
         generation_id = _digest_for(baseline["snapshotId"], records, _worker_hash(config),
-                                    _routing_hash(config, topic_routes, topic_migration))
+                                    _routing_hash(config, topic_routes, topic_migration, topic_merges))
         record_ids = sorted(item["id"] for item in records)
         if _current_is_digest(current, generations, generation_id):
             response = _generation_response(generations, generation_id)
