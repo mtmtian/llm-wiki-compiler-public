@@ -90,6 +90,9 @@ def prepare(config: dict[str, Any], audit: dict[str, Any], path: Path) -> dict[s
             verify_generation(state, Path(frozen['wikiRoot']))
     pinned = dict(config)
     pinned["wikiRoot"] = frozen["wikiRoot"]
+    from ledger_gate import enabled as ledger_enabled
+    if config.get("publishEnabled") and ledger_enabled(config):
+        pinned["knowledgeLedger"] = True  # held batches may carry accepted claims (claim-decisions.ts)
     return pinned
 
 

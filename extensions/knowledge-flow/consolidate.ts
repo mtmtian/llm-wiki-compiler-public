@@ -7,7 +7,7 @@ import { DURABLE_KNOWLEDGE_POLICY } from "../../src/compiler/knowledge-policy.js
 import { CodexAgentProvider } from "../../src/providers/codex-agent.js";
 import type { LLMProvider } from "../../src/utils/provider.js";
 import type { ClaimDecision, ClaimReview, FlowConfig, FlowJob, FlowResult } from "./types.js";
-import { claimReview, withClaimReviews } from "./claim-decisions.js";
+import { claimReview, finishResult } from "./claim-decisions.js";
 import { createCorrectionEditTool, createPlanTool, createTopicReviewTool, editTool, planTool } from "./consolidation-schema.js";
 import { durableModel } from "./consolidation-model.js";
 import { assertTopicContextBudget, resolvePlan, topicCatalog } from "./consolidation-plan.js";
@@ -75,7 +75,9 @@ async function editAndReview(job: FlowJob, config: FlowConfig, context: EditCont
   let correction: { reason: string; previousDraft: TopicDraft } | undefined;
   for (const stage of [undefined, "correction"]) {
     const outcome = await runEditStage(run, stage, correction);
-    if (outcome.result) return withClaimReviews(outcome.result, run.claimReviews);
+    if (outcome.result) {
+      return finishResult(outcome.result, run.claimReviews, { enabled: config.knowledgeLedger === true, reviewed: run.reviewed });
+    }
     correction = outcome.correction;
   }
   throw new Error("consolidation attempts exhausted");
@@ -88,8 +90,10 @@ interface EditRunContext {
   request: { stateDir: string; jobId: string; model: string; provider: LLMProvider };
   reviewer: LLMProvider;
   correctionCatalog: ReturnType<typeof buildCorrectionEvidence>;
-  /** Per-claim conclusions of each review attempt, in order; recorded only, see claim-decisions.ts. */
+  /** Per-claim conclusions of each review attempt, in order (claim-decisions.ts). */
   claimReviews: ClaimReview[];
+  /** The contribution the latest review judged; its accepted claims may become a ledger record. */
+  reviewed?: NonNullable<FlowResult["contribution"]>;
 }
 type DraftAttemptResult = { ok: true; draft: TopicDraft } | { ok: false; error: string };
 interface EditStageResult { result?: FlowResult; correction?: { reason: string; previousDraft: TopicDraft }; }
@@ -108,6 +112,7 @@ async function validateAndReviewStage(run: EditRunContext, stage: string | undef
   catch (error) { return validationFailure(run, stage, correction, draft, errorMessage(error)); }
   const review = await reviewAttempt(run, stage, draft, contribution);
   run.claimReviews.push(claimReview(stage, review, contribution.claims.length));
+  run.reviewed = contribution;
   if (review.decision === "accept") return { result: acceptedReview(run.job, draft.summary, review, contribution, run.topic.pages) };
   if (finalRejection(review, stage)) return { result: held(run.job, review.reason, draft.summary) };
   return { correction: { reason: review.reason, previousDraft: draft } };

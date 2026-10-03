@@ -56,6 +56,8 @@ export interface FlowJob {
 export interface FlowConfig {
   /** Enabled only after all replica participants attest semantic revision support. */
   topicScope?: "semantic";
+  /** Set by the host only while the shared knowledge-ledger gate is enabled (ledger_gate.py). */
+  knowledgeLedger?: boolean;
   wikiRoot: string;
   stateDir: string;
   model: "gpt-5.6-luna" | string;
@@ -144,6 +146,8 @@ export interface FlowResult {
   sessionMemory?: { summary: string; topicPageIds: string[] };
   /** Per-claim conclusions of every review attempt in this batch; observation only until the ledger gate. */
   claimReviews?: ClaimReview[];
+  /** A held batch's accepted claims; the host publishes them as one ledger record when the gate is enabled. */
+  ledgerContribution?: { claims: FlowClaim[]; evidence: FlowEvidence[] };
 }
 
 /** Internal dependency seam used by tests and by alternate local hosts. */
