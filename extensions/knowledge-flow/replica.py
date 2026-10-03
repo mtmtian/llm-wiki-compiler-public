@@ -27,6 +27,8 @@ from replica_records import (
     validate_no_credentials,
     validate_packet,
     valid_evidence_roles,
+    LEDGER_VERSION,
+    PUBLICATION_VERSION,
 )
 from shared_files import SharedFiles
 
@@ -371,14 +373,14 @@ def _shared_evidence(items: list[Any], machine: str) -> list[dict[str, Any]]:
 
 
 def _contract_packet(config: dict[str, Any], job: dict[str, Any], result: dict[str, Any],
-                     baseline_id: str) -> tuple[dict[str, Any], bytes]:
+                     baseline_id: str, version: int) -> tuple[dict[str, Any], bytes]:
     """Build and validate the packet from the frozen result alone.
 
     Nothing here reads shared state, so a failure means this result can never be
     published; it is reported as ``PublicationContractError`` rather than retried.
     """
     try:
-        payload = _publication_payload(config, job, result, baseline_id)
+        payload = {**_publication_payload(config, job, result, baseline_id), "version": version}
         packet = {"id": digest(canonical(payload)), "payload": payload}
         validate_packet(packet, config["machineId"], baseline_id)
     except (ValueError, KeyError, TypeError) as error:
@@ -389,29 +391,54 @@ def _contract_packet(config: dict[str, Any], job: dict[str, Any], result: dict[s
     return packet, encoded
 
 
-def publish_record(config: dict[str, Any], job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-    """Publish one reviewed record from any declared machine, idempotently."""
+def _write_packet(config: dict[str, Any], job: dict[str, Any], result: dict[str, Any], version: int) -> dict[str, Any]:
+    """Validate, admit and immutably write one record of the given envelope version."""
     validate_config(config)
     from exchange import require_legacy_importer
     require_legacy_importer(config, job)
-    from semantic_scope import require_publication
-    require_publication(config, job, result)
     if not config.get("publishEnabled"):
         raise ValueError("publication is disabled on this machine")
     baseline = _read_baseline_cached(config)
-    packet, encoded = _contract_packet(config, job, result, baseline["snapshotId"])
-    payload = packet["payload"]
-    if not _project_is_allowed(payload, config):
+    packet, encoded = _contract_packet(config, job, result, baseline["snapshotId"], version)
+    if not _project_is_allowed(packet["payload"], config):
         raise ValueError("publication project is not allowed")
-    root = Path(config["exchange"]["root"])
     relative = f"v2/publications/{config['machineId']}/{packet['id']}.json"
-    with SharedFiles(root) as exchange:
+    with SharedFiles(Path(config["exchange"]["root"])) as exchange:
         exchange.update(relative, encoded, None, packet["id"][:32], max_bytes=MAX_PACKET_BYTES)
+    return packet
+
+
+def publish_record(config: dict[str, Any], job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Publish one reviewed record from any declared machine, idempotently."""
+    from semantic_scope import require_publication
+    require_publication(config, job, result)
+    packet = _write_packet(config, job, result, PUBLICATION_VERSION)
+    payload = packet["payload"]
     response = {key: value for key, value in result.items() if key != "contribution"} | {
         "status": "published", "publicationId": packet["id"], "publishedPageIds": result.get("publishedPageIds", [])}
     if "topicRevisions" in payload:
         response["contribution"] = {"topicRevisions": payload["topicRevisions"]}
     return response
+
+
+def publish_ledger(config: dict[str, Any], job: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Publish a held batch's accepted claims as one ledger record; the batch itself stays held.
+
+    A closed gate, an unready reader or a contract violation publishes nothing: the claims
+    stay in the hold and the reason is kept on the result. Shared-storage errors propagate,
+    so finalization retries them like any other publication.
+    """
+    held = {key: value for key, value in result.items() if key != "ledgerContribution"}
+    from ledger_gate import enabled, require_ready
+    try:
+        if not enabled(config):
+            raise ValueError("knowledge ledger is not enabled")
+        require_ready(config)
+        packet = _write_packet(config, job, {"status": "submitted", "contribution": result["ledgerContribution"]},
+                               LEDGER_VERSION)
+    except ValueError as error:
+        return {**held, "ledgerError": str(error)[:300]}
+    return {**held, "ledgerPublicationId": packet["id"]}
 
 
 def replica_status(config: dict[str, Any]) -> dict[str, Any]:

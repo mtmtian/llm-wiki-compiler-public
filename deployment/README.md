@@ -221,13 +221,17 @@ llmwiki-maintain --semantic-topics status
 
 申报必须来自各机器实际安装的 runtime；build manifest 和 announcement 都应包含
 `semantic-topic-revisions-v1`（能读取账本记录的 runtime 还会申报 `knowledge-ledger-v1`，见
-[KNOWLEDGE-LEDGER.md](KNOWLEDGE-LEDGER.md) 第 7 节；目前没有 runtime 产出账本记录）。所有参与者就绪后，在任一机器执行：
+[KNOWLEDGE-LEDGER.md](KNOWLEDGE-LEDGER.md) 第 7 节）。所有参与者就绪后，在任一机器执行：
 
 ```sh
 llmwiki-maintain --semantic-topics enable
 llmwiki-maintain --semantic-topics enable --apply
 llmwiki-maintain --check
 ```
+
+账本记录的启用规则相同，但是独立的门控：所有参与者的申报都包含 `knowledge-ledger-v1` 后，用
+`llmwiki-maintain --knowledge-ledger status` 查看，`--knowledge-ledger enable` 预览，加 `--apply` 写入共享策略
+`v2/knowledge-ledger.json`。启用后不提供停用：已有的账本记录必须一直可读。启用前须单独授权。
 
 第一条只预演；第二条写入共享 `v2/topic-scope.json`，所有新版机器下一次运行时读取。
 任一旧版、缺失或本机版本不一致的申报都会阻止启用，发布前还会复核兼容状态。

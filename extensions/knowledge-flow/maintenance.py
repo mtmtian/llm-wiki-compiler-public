@@ -6,6 +6,7 @@ it never treats queue age as approval, and never rewrites a rejected decision.
 
 import argparse
 import datetime
+import importlib
 import json
 from pathlib import Path
 
@@ -130,6 +131,7 @@ def _parser():
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--announce", action="store_true", help="update this machine's shared readiness record")
     parser.add_argument("--semantic-topics", choices=("status", "enable"), help="inspect or activate shared topic organization")
+    parser.add_argument("--knowledge-ledger", choices=("status", "enable"), help="inspect or activate shared ledger records")
     parser.add_argument("--initialize-baseline", action="store_true", help="freeze the original shared Wiki once for v2")
     parser.add_argument("--resolve", metavar="JOB_ID")
     parser.add_argument("--retry-review", metavar="JOB_ID", help="reprocess a held session with its original evidence")
@@ -139,7 +141,7 @@ def _parser():
     writer.add_argument('--shared-writer-status', action='store_true')
     writer.add_argument('--request-shared-write', metavar='REQUEST_ID')
     writer.add_argument('--bootstrap-shared-writer', action='store_true')
-    parser.add_argument('--apply', action='store_true', help='apply an explicit shared-writer bootstrap or semantic topic activation')
+    parser.add_argument('--apply', action='store_true', help='apply an explicit shared-writer bootstrap, semantic topic or ledger activation')
     return parser
 
 
@@ -151,12 +153,12 @@ def main():
     if args.dry_run and not args.retry_review:
         parser.error('--dry-run requires --retry-review')
     if args.retry_review:
-        if args.drain or args.resolve or args.initialize_baseline or args.apply or args.announce or args.check or args.action or args.shared_writer_status or args.request_shared_write or args.bootstrap_shared_writer or args.semantic_topics:
+        if args.drain or args.resolve or args.initialize_baseline or args.apply or args.announce or args.check or args.action or args.shared_writer_status or args.request_shared_write or args.bootstrap_shared_writer or args.semantic_topics or args.knowledge_ledger:
             parser.error('--retry-review cannot be combined with other operations')
         from review_retry import retry_review
         print(json.dumps(retry_review(config, args.retry_review, dry_run=args.dry_run)))
         return
-    if _topic_command(parser, args, config) or _writer_command(parser, args, config):
+    if _gate_command(parser, args, config) or _writer_command(parser, args, config):
         return
     immutable = config.get("exchange", {}).get("protocolVersion") == 2
     if args.initialize_baseline:
@@ -182,18 +184,24 @@ def main():
         raise SystemExit(1)
 
 
-def _topic_command(parser, args, config):
-    """Expose an explicit all-reader activation without coupling it to writer ownership."""
-    if not args.semantic_topics:
+GATE_COMMANDS = {"semantic_topics": ("--semantic-topics", "semantic_scope"),
+                 "knowledge_ledger": ("--knowledge-ledger", "ledger_gate")}
+
+
+def _gate_command(parser, args, config):
+    """Expose explicit all-reader activations without coupling them to writer ownership."""
+    selected = [key for key in GATE_COMMANDS if getattr(args, key)]
+    if not selected:
         return False
-    if (args.drain or args.resolve or args.initialize_baseline or args.retry_review or args.announce or args.check
-            or args.action or args.shared_writer_status or args.request_shared_write or args.bootstrap_shared_writer):
-        parser.error('--semantic-topics cannot be combined with other operations')
-    if args.apply and args.semantic_topics != "enable":
-        parser.error('--apply requires --semantic-topics enable')
-    from semantic_scope import activate, readiness
-    result = (activate(config, now(), apply=args.apply) if args.semantic_topics == "enable"
-              else {"topicScope": config.get("topicScope", "project"), **readiness(config)})
+    option, module_name = GATE_COMMANDS[selected[0]]
+    if (len(selected) > 1 or args.drain or args.resolve or args.initialize_baseline or args.retry_review or args.announce
+            or args.check or args.action or args.shared_writer_status or args.request_shared_write or args.bootstrap_shared_writer):
+        parser.error(f'{option} cannot be combined with other operations')
+    action = getattr(args, selected[0])
+    if args.apply and action != "enable":
+        parser.error(f'--apply requires {option} enable')
+    gate = importlib.import_module(module_name)
+    result = gate.activate(config, now(), apply=args.apply) if action == "enable" else gate.status(config)
     print(json.dumps(result, ensure_ascii=False))
     return True
 
