@@ -83,7 +83,40 @@ async function consolidateWithRejectedClaim(pruned: unknown): Promise<{ result: 
   return { result, requests };
 }
 
+const scopePage = { action: "create", targetPageId: null, topic: "样例素材推广", decisionObject: "样例素材投放范围",
+  title: "样例素材投放范围", reason: "投放范围是独立的决策对象" };
+
+/** Plan an update of the budget page plus a new scope page that only rejected claim 1 revises. */
+async function consolidateTwoPages(pruned: unknown): Promise<{ result: FlowResult; requests: any[] }> {
+  const input = job();
+  input.evidence.push({ id: "user-3", kind: "user", text: scope, sha256: sha256Text(scope),
+    observedAt: "2025-01-15T00:00:00Z", locator: "codex://s/t3" });
+  const edit = (request: any) => {
+    const value = draft();
+    const created = request.pages[1].pageId;
+    value.claims.push({ ...value.claims[0], text: scope, quote: scope, evidenceId: "user-3", title: "投放范围",
+      targetPageId: created, decisionObject: scopePage.decisionObject });
+    value.pages.push({ pageId: created, body: "## 投放范围\n只在虚构渠道 A 测试。{{claim:1}}", claimIndexes: [1] });
+    return value;
+  };
+  const requests: any[] = [];
+  const rejectOne = (request: any) => ({ decision: "reject", reason: "第 2 条证据不支持", checkedClaimIndexes: [0, 1],
+    checkedPageIds: request.pages.map((page: any) => page.pageId), claimDecisions: verdicts("accept", "reject") });
+  const runtime = config({ knowledge_topic_plan: { ...plan(), pages: [...plan().pages, scopePage] }, knowledge_topic_edit: edit,
+    knowledge_topic_review: (request: any) => { requests.push(request); return requests.length < 3 ? rejectOne(request) : pruned; } });
+  return { result: await consolidateSession(input, runtime, new Map([[pageId, original]])), requests };
+}
+
 describe("partial page publication: end to end", () => {
+  it("Given the only claim of a planned new page is rejected, Then that page is not created and the rest publishes", async () => {
+    const { result, requests } = await consolidateTwoPages(accepted());
+    expect(result.status).toBe("submitted");
+    expect(result.contribution!.topicRevisions!.map(page => page.pageId)).toEqual([pageId]);
+    expect(result.contribution!.claims.map(claim => claim.text)).toEqual([job().prompt]);
+    expect(requests[2].pages.map((page: any) => page.pageId)).toEqual([pageId]);
+    expect(requests[2].plan.pages.map((page: any) => page.title)).toEqual([plan().pages[0].title]);
+  });
+
   it("Given a final review that rejects one claim, When the reduced draft passes a fresh review, Then it publishes without that claim", async () => {
     const { result, requests } = await consolidateWithRejectedClaim(accepted());
     expect(result.status).toBe("submitted");
