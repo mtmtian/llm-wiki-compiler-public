@@ -49,7 +49,9 @@ def _targets(record: tuple[str, dict[str, Any]], payloads: dict[str, dict[str, A
     found: set[str] = set()
     for claim in record[1].get("claims", []):
         refs = claim.get("supersedes", []) if isinstance(claim, dict) else []
-        for ref in refs if isinstance(refs, list) else [None]:
+        if not isinstance(refs, list):
+            return None
+        for ref in refs:
             if not _valid_target(ref, claim, record, payloads):
                 return None
             found.add(ref)
@@ -60,16 +62,18 @@ def _valid_target(ref: Any, claim: dict[str, Any], record: tuple[str, dict[str, 
                   payloads: dict[str, dict[str, Any]]) -> bool:
     """Check one reference against the visible records it may point to."""
     match = CLAIM_REF.fullmatch(ref) if isinstance(ref, str) else None
-    target = payloads.get(match.group(1)) if match else None
-    claims = target.get("claims") if isinstance(target, dict) else None
-    index = int(match.group(2)) if match else -1
-    if not isinstance(claims, list) or not 0 <= index < len(claims) or not isinstance(claims[index], dict):
+    if match is None:
         return False
-    old, (record_id, payload) = claims[index], record
+    target_id, index = match.group(1), int(match.group(2))
+    target = payloads.get(target_id, {})
+    claims = target.get("claims")
+    if not isinstance(claims, list) or index >= len(claims) or not isinstance(claims[index], dict):
+        return False
+    record_id, payload = record
     subject = _subject_key(claim)
-    return (target.get("projectId") == payload.get("projectId") and old.get("status") == "decided"
-            and subject != "" and _subject_key(old) == subject
-            and _order(match.group(1), target) < _order(record_id, payload))
+    return (target.get("projectId") == payload.get("projectId") and claims[index].get("status") == "decided"
+            and subject != "" and _subject_key(claims[index]) == subject
+            and _order(target_id, target) < _order(record_id, payload))
 
 
 def _subject_key(claim: dict[str, Any]) -> str:
