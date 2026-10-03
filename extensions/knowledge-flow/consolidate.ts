@@ -19,6 +19,7 @@ import { quoteContribution } from "./contribution.js";
 import { priorSourceContext } from "./consolidation-sources.js";
 import { validateRetirementReferences } from "./citation-retirement.js";
 import { citationChecklist, unaccountedCitations, withRepairedCitations } from "./citation-repair.js";
+import { claimAnchors, withRepairedQuotes } from "./quote-repair.js";
 
 interface TopicReview {
   decision: "accept" | "reject" | "needs_review";
@@ -103,7 +104,8 @@ async function runEditStage(run: EditRunContext, stage: string | undefined,
   correction: { reason: string; previousDraft: TopicDraft } | undefined): Promise<EditStageResult> {
   const attempt = await draftAttempt(run, stage, correction);
   if (!attempt.ok) return { result: held(run.job, attempt.error, correction?.previousDraft.summary ?? "") };
-  const draft = withRepairedCitations(withRoleAuthority(attempt.draft, run.job.evidence), run.topic.pages);
+  const repaired = withRepairedQuotes(attempt.draft, run.job.evidence);
+  const draft = withRepairedCitations(withRoleAuthority(repaired, run.job.evidence), run.topic.pages);
   return validateAndReviewStage(run, stage, correction, draft);
 }
 
@@ -152,7 +154,8 @@ async function loadDraftModel(run: EditRunContext, stage: string | undefined,
 function draftPrompt(run: EditRunContext, stage: string | undefined,
   correction: { reason: string; previousDraft: TopicDraft } | undefined): string {
   const correctionContext = correction ? { ...correction, diagnostics: correction.reason,
-    unaccountedCitations: unaccountedCitations(correction.previousDraft, run.topic.pages) } : undefined;
+    unaccountedCitations: unaccountedCitations(correction.previousDraft, run.topic.pages),
+    claimAnchors: claimAnchors(correction.previousDraft, run.correctionCatalog) } : undefined;
   return JSON.stringify({ projectId: run.job.projectId, sourceProjectId: run.job.projectId,
     ...(run.job.topicScope ? { topicScope: run.job.topicScope } : {}), currentTaskContext: run.job.prompt,
     sessionContext: run.job.sessionContext?.summary, plan: run.topic.plan,
@@ -328,7 +331,8 @@ const correctionEditSystem = editSystem + "\n\nCorrection diagnostics are determ
   "or leave the claim out when the evidence cannot support it; never satisfy a diagnostic by inventing an id or weakening authority. " +
   "Correction claims must omit topic and decisionObject; choose a targetPageId from the frozen planned pages, and the program will restore that page's canonical identity. " +
   "The correction context may list unaccountedCitations by pageId: preserve each exact marker in that page, or declare its exact citationRetirement with a real replacement so independent review can check it. " +
-  "An entry may also list invented markers (remove them, or restore the exact original marker they replaced) and outsideBasis retirements (remove those retirements: the page never had the marker). Do not silently add or remove citations.";
+  "An entry may also list invented markers (remove them, or restore the exact original marker they replaced) and outsideBasis retirements (remove those retirements: the page never had the marker). Do not silently add or remove citations. " +
+  "claimAnchors lists, for each previous claim, the quote options of the evidence it cited: choose that claim's quoteId from its anchors unless the diagnostics say this evidence cannot support it, and never move a claim to a different message, such as a user's question, only to satisfy the format.";
 
 const reviewSystem = DURABLE_KNOWLEDGE_POLICY + taskContextContract + "\n\nIndependently review the ENTIRE before/after page diff, routing and every claim against original evidence. " +
   "Evidence items carry an origin (current turns or earlier session context); a claim's primary quote must itself state that claim. " +
