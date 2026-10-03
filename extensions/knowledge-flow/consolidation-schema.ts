@@ -20,9 +20,18 @@ const retirement = object({ citation: text(1024), reason: text(1000),
   replacement: text(2048) });
 const pageEdit = object({ pageId: text(180), body: text(12000), claimIndexes: array(index, 5) },
   { citationRetirements: array(retirement, 500) });
-const reviewOutput = object({ decision: { enum: ["accept", "reject", "needs_review"] }, reason: text(2000),
+const verdict = { enum: ["accept", "reject", "needs_review"] };
+/**
+ * Per-claim conclusions are optional here so a missing or miscounted list can never fail a review:
+ * until the ledger gate is enabled they are only recorded (claim-decisions.ts). Codex's strict wire
+ * schema still requires the property, so the reviewer always returns it.
+ */
+const MAX_CLAIM_DECISIONS = 20;
+const claimDecisions = (claimIndex: Record<string, unknown>) =>
+  array(object({ claimIndex, decision: verdict, reason: text(2000) }), MAX_CLAIM_DECISIONS);
+const reviewOutput = object({ decision: verdict, reason: text(2000),
   checkedClaimIndexes: array(index, 5), checkedPageIds: array(text(180), 5) },
-  { checkedRetiredCitations: array(text(1024), 500) });
+  { checkedRetiredCitations: array(text(1024), 500), claimDecisions: claimDecisions(index) });
 
 function allowedStrings(values: readonly string[], maxLength: number): Record<string, unknown> {
   return values.length ? { ...text(maxLength), enum: [...new Set(values)] } : { not: {} };
@@ -162,8 +171,9 @@ export function createTopicReviewTool(claimCount: number, pageIds: readonly stri
   const pageSchema = pageIds.length ? allowedStrings(pageIds, 180) : text(180);
   const retirementSchema = retirementCitations.length ? allowedStrings(retirementCitations, 1024) : text(1024);
   return { name: topicReviewTool.name, description: topicReviewTool.description,
-    input_schema: object({ decision: { enum: ["accept", "reject", "needs_review"] }, reason: text(2000),
+    input_schema: object({ decision: verdict, reason: text(2000),
       checkedClaimIndexes: array(allowedIndexes(claimIndexes), Math.min(5, claimIndexes.length)),
       checkedPageIds: array(pageSchema, Math.min(5, pageIds.length)) },
-    { checkedRetiredCitations: array(retirementSchema, Math.min(500, retirementCitations.length)) }) };
+    { checkedRetiredCitations: array(retirementSchema, Math.min(500, retirementCitations.length)),
+      claimDecisions: claimDecisions(allowedIndexes(claimIndexes)) }) };
 }

@@ -144,6 +144,8 @@ Wiki 要沉淀 agent 工作中的**业务结果**和**用户给出的决定**，
 ### 7.2 逐条审核契约
 
 - 审核工具（`createTopicReviewTool`）增加必填的 `claimDecisions`：每条 claim 对应一项 `{ claimIndex, decision: "accept" | "reject" | "needs_review", reason }`，必须恰好覆盖全部 claim，由程序校验（与现有的 `verifyReviewCoverage` 相同）。页面级的 `decision` 保留，只对页面修订本身负责。
+  - B2（门控关闭）期间，`claimDecisions` 在程序校验层是可选的：Codex 的严格输出 schema 仍要求审核模型返回它，但缺失、重复或漏项只会把这次记录标为不完整，不会让审核失败或改变结果。每次审核的逐条结论按顺序保存在批次结果的 `claimReviews` 中，供观察期统计。
+  - 启用门控（B3）后，分流只使用完整覆盖的逐条结论；不完整时按现有页面级结论处理。
 - 门控启用时，按下表分流：
 
 | 页面结论 | claim 结论 | 结果 |

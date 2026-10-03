@@ -112,6 +112,24 @@ export interface FlowReviewDecision {
 }
 
 /** Result returned to the host route. */
+/** A reviewer's conclusion on one claim; the page-level decision still decides the outcome. */
+export interface ClaimDecision {
+  claimIndex: number;
+  decision: "accept" | "reject" | "needs_review";
+  reason: string;
+}
+
+/**
+ * One review attempt's per-claim conclusions, recorded for the ledger observation period
+ * (deployment/KNOWLEDGE-LEDGER.md §7.2). `complete` is false unless every claim has exactly one conclusion.
+ */
+export interface ClaimReview {
+  stage: "initial" | "correction";
+  decision: ClaimDecision["decision"];
+  complete: boolean;
+  claims: ClaimDecision[];
+}
+
 export interface FlowResult {
   status: "published" | "submitted" | "empty" | "needs_review" | "error";
   publishedPageIds: string[];
@@ -122,6 +140,8 @@ export interface FlowResult {
   submissionId?: string;
   contribution?: { claims: FlowClaim[]; evidence: FlowEvidence[]; topicRevisions?: TopicRevision[] };
   sessionMemory?: { summary: string; topicPageIds: string[] };
+  /** Per-claim conclusions of every review attempt in this batch; observation only until the ledger gate. */
+  claimReviews?: ClaimReview[];
 }
 
 /** Internal dependency seam used by tests and by alternate local hosts. */
