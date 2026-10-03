@@ -127,7 +127,8 @@ export interface ClaimDecision {
  * (deployment/KNOWLEDGE-LEDGER.md §7.2). `complete` is false unless every claim has exactly one conclusion.
  */
 export interface ClaimReview {
-  stage: "initial" | "correction";
+  /** `pruned` reviews the final draft restricted to the claims the previous review accepted (claim-pruning.ts). */
+  stage: "initial" | "correction" | "pruned";
   decision: ClaimDecision["decision"];
   complete: boolean;
   claims: ClaimDecision[];

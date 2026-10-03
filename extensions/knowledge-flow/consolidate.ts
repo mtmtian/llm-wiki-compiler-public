@@ -20,6 +20,10 @@ import { priorSourceContext } from "./consolidation-sources.js";
 import { validateRetirementReferences } from "./citation-retirement.js";
 import { citationChecklist, unaccountedCitations, withRepairedCitations } from "./citation-repair.js";
 import { claimAnchors, preserveEvidence, withRepairedQuotes } from "./quote-repair.js";
+import { withoutRejectedClaims } from "./claim-pruning.js";
+
+// Durable stage name of the review that checks a draft restricted to its accepted claims.
+const PRUNED_STAGE = "pruned";
 
 interface TopicReview {
   decision: "accept" | "reject" | "needs_review";
@@ -113,15 +117,41 @@ async function runEditStage(run: EditRunContext, stage: string | undefined,
 
 async function validateAndReviewStage(run: EditRunContext, stage: string | undefined,
   correction: { reason: string; previousDraft: TopicDraft } | undefined, draft: TopicDraft): Promise<EditStageResult> {
+  const outcome = await reviewedDraft(run, stage, draft);
+  if ("error" in outcome) return validationFailure(run, stage, correction, draft, outcome.error);
+  const { review, contribution } = outcome;
+  if (review.decision === "accept") return { result: acceptedReview(run.job, draft.summary, review, contribution, run.topic.pages) };
+  if (finalRejection(review, stage)) return { result: await acceptedClaimsOnly(run, draft, review) };
+  return { correction: { reason: review.reason, previousDraft: draft } };
+}
+
+type ReviewedDraft = { review: TopicReview; contribution: NonNullable<FlowResult["contribution"]> } | { error: string };
+
+/** Validate a draft and, when it is valid, review it and record the per-claim conclusions. */
+async function reviewedDraft(run: EditRunContext, stage: string | undefined, draft: TopicDraft): Promise<ReviewedDraft> {
   let contribution: NonNullable<FlowResult["contribution"]>;
   try { contribution = checkedContribution(draft, run.job, run.topic.pages, run.config.maxProposals, run.topic.priorSources); }
-  catch (error) { return validationFailure(run, stage, correction, draft, errorMessage(error)); }
+  catch (error) { return { error: errorMessage(error) }; }
   const review = await reviewAttempt(run, stage, draft, contribution);
   run.claimReviews.push(claimReview(stage, review, contribution.claims.length));
   run.reviewed = contribution;
-  if (review.decision === "accept") return { result: acceptedReview(run.job, draft.summary, review, contribution, run.topic.pages) };
-  if (finalRejection(review, stage)) return { result: held(run.job, review.reason, draft.summary) };
-  return { correction: { reason: review.reason, previousDraft: draft } };
+  return { review, contribution };
+}
+
+/**
+ * After a final rejection, publish the accepted claims alone when they pass validation and a fresh review
+ * (claim-pruning.ts). This step is optional: any failure in it holds the batch exactly as before, with the cause.
+ */
+async function acceptedClaimsOnly(run: EditRunContext, draft: TopicDraft, review: TopicReview): Promise<FlowResult> {
+  const heldWith = (note?: string) => held(run.job, note ? `${review.reason}；只保留已接受的 claim 后${note}` : review.reason, draft.summary);
+  const pruned = withoutRejectedClaims(draft, run.claimReviews.at(-1));
+  if (!pruned) return heldWith();
+  let outcome: ReviewedDraft;
+  try { outcome = await reviewedDraft(run, PRUNED_STAGE, pruned); }
+  catch (error) { return heldWith(`审核失败：${errorMessage(error)}`); }
+  if ("error" in outcome) return heldWith(`未通过校验：${outcome.error}`);
+  if (outcome.review.decision !== "accept") return heldWith(`仍未通过审核：${outcome.review.reason}`);
+  return acceptedReview(run.job, pruned.summary, outcome.review, outcome.contribution, run.topic.pages);
 }
 
 function validationFailure(run: EditRunContext, stage: string | undefined, correction: { reason: string; previousDraft: TopicDraft } | undefined,
