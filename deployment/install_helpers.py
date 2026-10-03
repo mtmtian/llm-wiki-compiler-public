@@ -14,23 +14,58 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+CODEX_HOOK_LAUNCHER = Path(".local/bin/llmwiki-codex-hook")
+
+
 def own_hook(entry: Any, config_path: Path) -> bool:
-    """Identify only this installer's hook command for the exact config."""
+    """Identify only this installer's hook command for the exact config.
+
+    Recognizes the stable launcher form and the older runtime-pinned form, so an
+    upgrade replaces a pinned entry and role inference still reads old installs.
+    """
     if not isinstance(entry, dict) or entry.get("type") != "command" or not isinstance(entry.get("command"), str):
         return False
     try:
         tokens = shlex.split(entry["command"])
     except ValueError:
         return False
+    if len(tokens) == 3 and Path(tokens[0]).name == CODEX_HOOK_LAUNCHER.name and tokens[1] == "--config":
+        return Path(tokens[2]).resolve() == config_path.resolve()
     if len(tokens) != 4 or not Path(tokens[0]).name.startswith("python") or tokens[2] != "--config":
         return False
     return (Path(tokens[3]).resolve() == config_path.resolve()
             and Path(tokens[1]).name == "hooks.py" and Path(tokens[1]).parent.name == "knowledge-flow")
 
 
-def hook_command(runtime: Path, config_path: Path, python: str | None = None) -> str:
-    """Build the synchronous command used by both native hooks."""
-    return shlex.join([python or sys.executable, str(runtime / "knowledge-flow/hooks.py"), "--config", str(config_path)])
+def hook_command(launcher: Path, config_path: Path) -> str:
+    """Build the Codex hook command around the stable launcher.
+
+    Codex trusts a hook by a hash of its definition; naming the immutable runtime
+    here would change that hash on every deployment and require re-trust.
+    """
+    return shlex.join([str(launcher), "--config", str(config_path)])
+
+
+def _config_worker(py: str) -> str:
+    """Shell line setting WORKER from $CONFIG, the private record of the installed runtime.
+
+    Shared by the stable launchers so they resolve the runtime the same way.
+    """
+    return f"WORKER=\"$({py} -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"worker\"])' \"$CONFIG\")\""
+
+
+def render_codex_hook(python: str) -> str:
+    """Render the launcher that runs hooks.py of the runtime named by the config's worker.
+
+    Like ``render_maintenance`` it contains no runtime path, so it is byte-identical
+    across upgrades; the installer-written private config selects the runtime.
+    """
+    py = shlex.quote(python)
+    return "\n".join(("#!/bin/sh", "set -eu",
+        '[ "$#" -eq 2 ] && [ "$1" = --config ] || { echo "usage: llmwiki-codex-hook --config PATH" >&2; exit 64; }',
+        'CONFIG="$2"',
+        _config_worker(py),
+        f"exec {py} \"$(dirname \"$WORKER\")/hooks.py\" --config \"$CONFIG\"", ""))
 
 
 def redact(path: Path, variables: dict[str, str]) -> str:
@@ -69,7 +104,7 @@ def render_maintenance(config_path: Path, python: str) -> str:
     """Render a maintenance launcher following the configured runtime."""
     py, cfg = shlex.quote(python), shlex.quote(str(config_path))
     return "\n".join(("#!/bin/sh", "set -eu", f"CONFIG={cfg}",
-        f"WORKER=\"$({py} -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"worker\"])' \"$CONFIG\")\"",
+        _config_worker(py),
         f"exec {py} \"$(dirname \"$WORKER\")/maintenance.py\" --config \"$CONFIG\" \"$@\"", ""))
 
 

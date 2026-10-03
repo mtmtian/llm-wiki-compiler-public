@@ -64,8 +64,12 @@ def git_identity(cwd):
         return root, None
 
 
-def eligible_repo(identity, config):
-    """Only known owners and non-forks qualify, except explicit working-fork overrides."""
+def eligible_repo(identity, config, allow_archived=False):
+    """Only known owners and non-forks qualify, except explicit working-fork overrides.
+
+    Archived repositories accept no new work; ``allow_archived`` is only for
+    reading knowledge that was published while the repository was active.
+    """
     identity = str(identity or "").lower()
     excluded = {str(value).lower() for value in config.get("excludedRepos", [])}
     working_forks = {str(value).lower() for value in config.get("workingForks", [])}
@@ -85,7 +89,7 @@ def eligible_repo(identity, config):
             save_json(cache_path, cache)
         except (subprocess.SubprocessError, OSError, ValueError, KeyError):
             return False
-    return cache[identity].get("fork") is False and not cache[identity].get("archived", True)
+    return cache[identity].get("fork") is False and (allow_archived or not cache[identity].get("archived", True))
 
 
 def topic_project(prompt, config):

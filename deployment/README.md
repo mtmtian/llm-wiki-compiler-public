@@ -204,7 +204,7 @@ GitHub 仓库，且 owner 或 `workingForks` 允许该仓库。它只删除与�
 
 `enable` 只接受已准备好的本机配置；`bootout` 停止自身 LaunchAgent；`rollback` 先尝试 bootout，再删除自身 plist 和 `~/.local/bin/llmwiki-wake`，不会删除队列、证据、review 或 exchange。`--dry-run` 不运行 `launchctl`。配置缺失或 JSON 损坏时，`bootout`、`status` 和 `rollback` 仍可操作本工具的固定服务标识；只有启用需要有效配置。Linux 或其他平台只生成和检查配置，不会声称事件 worker 已激活。
 
-在 Codex 原生 `/hooks` 信任新建或定义变化后的三个 Wiki hook（UserPromptSubmit、Stop、SessionStart），再新开任务检验项目参考与 Stop 事件。安装器不会伪造信任或绕过原生检查。其他设备或旧版本的验证不能证明当前安装已生效；桌面宿主须在该设备的新任务中另行验证。
+在 Codex 原生 `/hooks` 信任新建或定义变化后的三个 Wiki hook（UserPromptSubmit、Stop、SessionStart），再新开任务检验项目参考与 Stop 事件。安装器不会伪造信任或绕过原生检查。hook 命令调用稳定启动器 `~/.local/bin/llmwiki-codex-hook --config <配置>`，启动器在运行时按配置的 `worker` 找到已安装 runtime 的 `hooks.py`；因此升级 runtime 时 hook 定义和启动器都不变，不需要重新信任。只有首次安装、从旧版（命令中带 runtime 路径）迁移，或配置路径改变时才需要信任一次。其他设备或旧版本的验证不能证明当前安装已生效；桌面宿主须在该设备的新任务中另行验证。
 
 ### 按语义主题组织 Wiki
 
@@ -255,9 +255,15 @@ topic/decisionObject，避免模型改写引用、把片段配到错误来源或
 初稿格式错误仍进入原有的一次纠正，纠正失败继续待审。审核回执只允许列出本次实际修改页、claim 和退役引用，不能把目录中未修改的页面列作已审核。
 纠正输出按主证据角色限制 `kind`、`status` 和补充证据范围：assistant 只能形成历史 lesson，
 artifact 只能形成历史事实、约束或经验；只有用户主证据可选择 assistant 补充引文。
+宿主以 user 角色注入、但并非用户本人输入的消息（后台任务通知 `<task-notification>`、自动化心跳 `<heartbeat>`、
+页面事件 `<external_codex_apps_open_page>`、环境上下文 `<environment_context>`），若整条消息只由这些块组成，采集时记为 artifact 证据；
+消息里还有用户自己的文字时仍按 user 证据处理。
 结构约束通过仍须经过原文校验与独立全文审核，真实的事实矛盾和未确认决策会继续待审。
 草稿阶段与发布阶段使用相同的证据角色约束：assistant 补充引文只能解释用户主证据，
 不能给另一条 assistant 或文件主证据增加决策权限；不合规组合先纠正，再独立审核。
+已保存的模型结果如果在发布时因自身内容违反契约而被拒绝（例如在当前证据角色约束之前生成），
+重试同一结果永远不会成功：批次不再退避，直接记为待审，原因写明违反的契约，被拒结果保留在
+批次审计中，可用下面的 `--retry-review` 按当前约束重新起草。交换目录或网络等其他发布失败仍按原退避重试。
 一个批次等待发布或副本重试时，只暂停同一会话的后续整理，其他会话可以继续；
 每日预算耗尽仍暂停所有新模型工作，已生成的结果保留并按原退避时间重试。
 某个项目的待审数量达到 `maxPendingPerProject` 时，它尚未领取的新工作留在队列中等待：
