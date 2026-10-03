@@ -25,6 +25,10 @@ MAX_PACKET_BYTES = 128 * 1024
 MAX_BASELINE_BYTES = 64 * 1024 * 1024
 MAX_CLAIMS = 5
 MAX_EVIDENCE = 20
+PUBLICATION_VERSION = 2
+LEDGER_VERSION = 3  # claims-only ledger records, deployment/KNOWLEDGE-LEDGER.md §7.1
+MAX_SUPERSEDES = 5
+CLAIM_REF = re.compile(r"^([a-f0-9]{64}):(0|[1-9][0-9]*)$")
 REQUIRED_BASELINE_PREFIXES = ("sources/", "wiki/")
 METADATA_PATHS = {".llmwiki/config.json", ".llmwiki/state.json", ".llmwiki/schema.json"}
 SECRET_KEY = re.compile(
@@ -222,7 +226,7 @@ def validate_packet(packet: Any, machine: str, baseline_id: str) -> dict[str, An
     if not isinstance(packet, dict) or set(packet) != {"id", "payload"} or not is_hash(packet.get("id")):
         raise ValueError("invalid publication packet")
     payload = packet.get("payload")
-    if not isinstance(payload, dict) or payload.get("version") != 2:
+    if not isinstance(payload, dict) or payload.get("version") not in (PUBLICATION_VERSION, LEDGER_VERSION):
         raise ValueError("unknown publication version")
     required = {"version", "baselineId", "machineId", "projectId", "projectLabel", "createdAt",
                 "originJobHash", "repoIdentity", "basisRecordIds", "claims", "evidence", "review"}
@@ -239,6 +243,7 @@ def validate_packet(packet: Any, machine: str, baseline_id: str) -> dict[str, An
     if not valid_evidence_roles(claims, evidence):
         raise ValueError("assistant evidence requires historical lessons")
     _validate_claims(claims, evidence_by_id)
+    _validate_ledger(payload)
     _validate_topic_revisions(payload.get("topicRevisions"), claims, payload.get("projectId"))
     _validate_basis(payload.get("basisRecordIds"))
     return packet
@@ -295,6 +300,24 @@ def _validate_basis(basis: Any) -> None:
         raise ValueError("publication basisRecordIds is invalid")
     if len(set(basis)) != len(basis) or any(not is_hash(item) for item in basis):
         raise ValueError("publication basisRecordIds is invalid")
+
+
+def _validate_ledger(payload: dict[str, Any]) -> None:
+    """Ledger records carry claims only; only their decided claims with a subject may supersede.
+
+    Rules that need other records (target visible, same subject, earlier) live in ``ledger.py``.
+    """
+    is_ledger = payload["version"] == LEDGER_VERSION
+    if is_ledger and "topicRevisions" in payload:
+        raise ValueError("ledger record cannot carry topic revisions")
+    for claim in payload["claims"]:
+        refs = claim.get("supersedes")
+        if "supersedes" in claim and (
+                not is_ledger or claim["status"] != "decided" or "decisionObject" not in claim
+                or not isinstance(refs, list) or not 1 <= len(refs) <= MAX_SUPERSEDES
+                or any(not isinstance(ref, str) or not CLAIM_REF.fullmatch(ref) for ref in refs)
+                or len(set(refs)) != len(refs)):
+            raise ValueError("publication claim supersedes is invalid")
 
 
 def _validate_optional_claim_fields(claim: dict[str, Any]) -> None:

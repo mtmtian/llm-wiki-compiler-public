@@ -54,6 +54,12 @@ describe("reviewed topic migration", () => {
     expect(result.applied).toBe(true); expect(result.conflicts).toEqual([]);
   });
 
+  it("Given a ledger record for the migrated object, Then migration does not hold it as an extra legacy record", () => {
+    const ledger = record("b"); ledger.payload.version = 3;
+    const result = applyTopicMigration(config, migration(), new Map([[oldPage, oldBody]]), [record("a"), ledger]);
+    expect(result.applied).toBe(true); expect(result.conflicts).toEqual([]);
+  });
+
   it("Given an extra record for the migrated object or a missing basis, Then migration holds or fails closed", () => {
     const same = applyTopicMigration(config, migration(), new Map([[oldPage, oldBody]]), [record("a"), record("b")]);
     expect(same.applied).toBe(true); expect(same.conflicts[0].reason).toMatch(/extra legacy/);

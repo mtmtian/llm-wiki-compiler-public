@@ -5,7 +5,8 @@ import type { TopicRevision } from "./topic-revision-types.js";
 export interface PublicationRecord {
   id: string;
   payload: {
-    version: 2;
+    /** 2: page-backed publication; 3: claims-only ledger record (deployment/KNOWLEDGE-LEDGER.md §7.1). */
+    version: 2 | 3;
     baselineId: string;
     machineId: string;
     projectId: string;
@@ -19,6 +20,17 @@ export interface PublicationRecord {
     topicRevisions?: TopicRevision[];
     review: { status: "accepted"; model: string };
   };
+}
+
+const LEDGER_VERSION = 3;
+
+/**
+ * Only legacy publications become appended page paragraphs: revisions replace whole
+ * pages, and ledger records never touch page text. Any other version still reaches
+ * the strict claim validation and fails there.
+ */
+export function rendersAsFragment(record: PublicationRecord): boolean {
+  return record.payload.version !== LEDGER_VERSION && !record.payload.topicRevisions?.length;
 }
 
 export interface PublicationConflict {

@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import datetime as _datetime
 import json
-import re
 from pathlib import Path
 from typing import Any
 
-from replica_records import canonical, is_hash
+from replica_records import CLAIM_REF, LEDGER_VERSION, canonical, is_hash
 from revision_contract import validate_topic_migration
 from shared_files import SharedFiles
 
@@ -24,7 +23,6 @@ MAX_GROUPS = 1000
 MAX_REFS = 5000
 MAX_TOPIC_LENGTH = 160
 MAX_OBJECT_LENGTH = 160
-CLAIM_REF = re.compile(r"^([a-f0-9]{64}):(0|[1-9][0-9]*)$")
 
 
 def _text(value: Any, field: str, limit: int) -> str:
@@ -75,7 +73,7 @@ def _claim_for(ref: str, records: dict[str, dict[str, Any]]) -> tuple[str, dict[
     if not isinstance(claims, list) or index >= len(claims):
         raise ValueError("topic route claimRef index is invalid")
     claim = claims[index]
-    if not isinstance(claim, dict) or "decisionObject" in claim:
+    if not isinstance(claim, dict) or "decisionObject" in claim or payload.get("version") == LEDGER_VERSION:
         raise ValueError("topic route claimRef must target a legacy claim")
     return record_id, claim
 

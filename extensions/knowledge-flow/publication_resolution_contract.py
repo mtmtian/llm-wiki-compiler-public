@@ -10,7 +10,7 @@ import datetime
 import json
 from typing import Any
 
-from replica_records import is_hash
+from replica_records import LEDGER_VERSION, is_hash
 
 _ENVELOPE_FIELDS = {"version", "baselineId", "reviewedAt", "resolutions"}
 _RESOLUTION_FIELDS = {"recordId", "coveredBy", "claimMappings", "reason"}
@@ -124,7 +124,7 @@ def _validate_record_pair(old: dict[str, Any], replacement: dict[str, Any],
         raise ValueError("publication resolution record baseline does not match")
     if not isinstance(old.get("projectId"), str) or old.get("projectId") != replacement.get("projectId"):
         raise ValueError("publication resolution crosses projects")
-    if "topicRevisions" in old:
+    if old.get("version") == LEDGER_VERSION or "topicRevisions" in old:
         raise ValueError("resolved publication must be a legacy record")
     revisions = replacement.get("topicRevisions")
     if not isinstance(revisions, list) or not revisions:

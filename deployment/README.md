@@ -220,7 +220,8 @@ llmwiki-maintain --semantic-topics status
 ```
 
 申报必须来自各机器实际安装的 runtime；build manifest 和 announcement 都应包含
-`semantic-topic-revisions-v1`。所有参与者就绪后，在任一机器执行：
+`semantic-topic-revisions-v1`（能读取账本记录的 runtime 还会申报 `knowledge-ledger-v1`，见
+[KNOWLEDGE-LEDGER.md](KNOWLEDGE-LEDGER.md) 第 7 节；目前没有 runtime 产出账本记录）。所有参与者就绪后，在任一机器执行：
 
 ```sh
 llmwiki-maintain --semantic-topics enable
