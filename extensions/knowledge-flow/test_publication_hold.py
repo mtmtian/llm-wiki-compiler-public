@@ -25,13 +25,17 @@ def _evidence(identifier, kind, text):
             "observedAt": "2026-09-18T00:00:00Z", "locator": "session:" + identifier}
 
 
+def _claim(evidence, kind, status, **extra):
+    return {"text": kind, "quote": evidence["text"], "evidenceId": evidence["id"], "useWhen": "always",
+            "title": kind, "topic": "t", "slug": kind, "targetPageId": None,
+            "kind": kind, "status": status, "rationale": "old draft", **extra}
+
+
 def _old_contribution():
     """An assistant quote supporting an assistant-primary lesson, which the contract forbids."""
     primary, support = _evidence("a1", "assistant", "assistant summary"), _evidence("a2", "assistant", "more context")
-    claim = {"text": "lesson", "quote": primary["text"], "evidenceId": "a1", "useWhen": "always",
-             "title": "lesson", "topic": "t", "slug": "lesson", "targetPageId": None,
-             "kind": "lesson", "status": "historical", "rationale": "old draft",
-             "supportingQuotes": [{"evidenceId": "a2", "quote": support["text"]}]}
+    claim = _claim(primary, "lesson", "historical",
+                   supportingQuotes=[{"evidenceId": "a2", "quote": support["text"]}])
     return {"claims": [claim], "evidence": [primary, support]}
 
 
@@ -52,10 +56,10 @@ class PublicationHoldTests(unittest.TestCase):
                        "projects": {"project": {"label": "Project", "pages": []}},
                        "exchange": {"protocolVersion": 2, "root": str(self.exchange), "participants": ["a"]}}
         initialize_baseline(self.config)
-        self.result = {"status": "submitted", "publishedPageIds": [], "contribution": _old_contribution()}
-        self.freeze()
+        self.freeze(_old_contribution())
 
-    def freeze(self):
+    def freeze(self, contribution):
+        self.result = {"status": "submitted", "publishedPageIds": [], "contribution": contribution}
         source = {"id": "turn-old", "projectId": "project", "sessionId": "s",
                   "evidence": self.result["contribution"]["evidence"]}
         save_json(self.state / "queue/turn-old.json", source)
@@ -92,6 +96,15 @@ class PublicationHoldTests(unittest.TestCase):
         staged = retry_review(self.config, "batch-old", dry_run=True, clock=lambda: self.now)
         self.assertEqual(staged["status"], "ready")
         self.assertEqual(staged["reviewJobId"], "batch-old")
+
+    def test_violation_found_only_by_packet_validation_is_held_too(self):
+        """Given evidence that no claim references, which only packet validation rejects, Then it is held."""
+        user, unused = _evidence("u", "user", "keep the launcher"), _evidence("x", "user", "unused remark")
+        self.freeze({"claims": [_claim(user, "decision", "decided")], "evidence": [user, unused]})
+        self.drain()
+        audit = load_json(self.state / "batches/batch-old.json")
+        self.assertEqual((audit["status"], audit["result"]["status"]), ("completed", "needs_review"))
+        self.assertIn("not referenced by a claim", audit["result"]["error"])
 
     def test_other_finalization_errors_keep_their_backoff(self):
         """Given an export failure that is not a contract violation, Then the batch backs off as before."""
