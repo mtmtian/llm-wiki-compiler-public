@@ -6,7 +6,8 @@
 import { DURABLE_KNOWLEDGE_POLICY } from "../../src/compiler/knowledge-policy.js";
 import { CodexAgentProvider } from "../../src/providers/codex-agent.js";
 import type { LLMProvider } from "../../src/utils/provider.js";
-import type { FlowConfig, FlowJob, FlowResult } from "./types.js";
+import type { ClaimDecision, ClaimReview, FlowConfig, FlowJob, FlowResult } from "./types.js";
+import { claimReview, withClaimReviews } from "./claim-decisions.js";
 import { createCorrectionEditTool, createPlanTool, createTopicReviewTool, editTool, planTool } from "./consolidation-schema.js";
 import { durableModel } from "./consolidation-model.js";
 import { assertTopicContextBudget, resolvePlan, topicCatalog } from "./consolidation-plan.js";
@@ -24,6 +25,8 @@ interface TopicReview {
   checkedClaimIndexes: number[];
   checkedPageIds: string[];
   checkedRetiredCitations?: string[];
+  /** Optional to the program: nothing depends on it until the ledger gate (claim-decisions.ts). */
+  claimDecisions?: ClaimDecision[];
 }
 
 /** Process a bounded increment using durable session context and its complete scoped topic catalog. */
@@ -68,11 +71,11 @@ async function editAndReview(job: FlowJob, config: FlowConfig, context: EditCont
   const reviewer = config.reviewer ?? new CodexAgentProvider(config.model, { timeoutMs: 180_000 });
   const run: EditRunContext = { job, config, topic: context,
     request: { stateDir: config.stateDir, jobId: job.id, model: config.model, provider }, reviewer,
-    correctionCatalog: buildCorrectionEvidence(job.evidence) };
+    correctionCatalog: buildCorrectionEvidence(job.evidence), claimReviews: [] };
   let correction: { reason: string; previousDraft: TopicDraft } | undefined;
   for (const stage of [undefined, "correction"]) {
     const outcome = await runEditStage(run, stage, correction);
-    if (outcome.result) return outcome.result;
+    if (outcome.result) return withClaimReviews(outcome.result, run.claimReviews);
     correction = outcome.correction;
   }
   throw new Error("consolidation attempts exhausted");
@@ -85,6 +88,8 @@ interface EditRunContext {
   request: { stateDir: string; jobId: string; model: string; provider: LLMProvider };
   reviewer: LLMProvider;
   correctionCatalog: ReturnType<typeof buildCorrectionEvidence>;
+  /** Per-claim conclusions of each review attempt, in order; recorded only, see claim-decisions.ts. */
+  claimReviews: ClaimReview[];
 }
 type DraftAttemptResult = { ok: true; draft: TopicDraft } | { ok: false; error: string };
 interface EditStageResult { result?: FlowResult; correction?: { reason: string; previousDraft: TopicDraft }; }
@@ -102,6 +107,7 @@ async function validateAndReviewStage(run: EditRunContext, stage: string | undef
   try { contribution = checkedContribution(draft, run.job, run.topic.pages, run.config.maxProposals, run.topic.priorSources); }
   catch (error) { return validationFailure(run, stage, correction, draft, errorMessage(error)); }
   const review = await reviewAttempt(run, stage, draft, contribution);
+  run.claimReviews.push(claimReview(stage, review, contribution.claims.length));
   if (review.decision === "accept") return { result: acceptedReview(run.job, draft.summary, review, contribution, run.topic.pages) };
   if (finalRejection(review, stage)) return { result: held(run.job, review.reason, draft.summary) };
   return { correction: { reason: review.reason, previousDraft: draft } };
@@ -321,6 +327,8 @@ const correctionEditSystem = editSystem + "\n\nCorrection diagnostics are determ
   "The correction context may list unaccountedCitations by pageId: preserve each exact marker in that page, or declare its exact citationRetirement with a real replacement so independent review can check it. Do not silently add or remove citations.";
 
 const reviewSystem = DURABLE_KNOWLEDGE_POLICY + taskContextContract + "\n\nIndependently review the ENTIRE before/after page diff, routing and every claim against original evidence. " +
+  "Also return claimDecisions with exactly one entry per claim index: accept, reject or needs_review with a short reason, judged on that claim's " +
+  "own evidence, role authority and wording alone. The top-level decision still covers the whole diff and routing. " +
   "The proposed new prose is in revisions; existing contains the BEFORE text, while pages records the frozen destination identities. " +
   "Do not attribute removed before-text to the new draft. " +
   "priorSources contains the exact original files for existing citation markers, and supports retained historical context. " +
