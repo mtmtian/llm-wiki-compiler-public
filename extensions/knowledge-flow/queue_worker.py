@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from common import digest, load_json, page_ids, save_json
 from exchange import export_result, import_pending, settings, write_receipt
+from publication_hold import hold_unpublishable
 from queue_replica import due as replica_due, enabled as replica_enabled
 from queue_replica import mark_retry as mark_replica_retry, prepare as prepare_replica
 from queue_schedule import clock_value as _clock_value, due_at as _due_at, iso as _iso
@@ -26,6 +27,7 @@ from queue_recovery import (fail_batch, move_terminal_source, reconcile_failed_b
                             reconcile_receipts, replay_completed, retry_sources,
                             retry_job as _retry_job, terminal_source, existing_audit as _existing_audit)
 from queue_wire import EventTooLarge, checked_request, job_bytes
+from replica import PublicationContractError
 from queue_intake import cleanup_terminal_pending as _cleanup_terminal_pending
 from queue_intake import load_jobs as _load_jobs
 from review_capacity import should_wait_for_review
@@ -176,7 +178,11 @@ def _finalize(config, audit, result=None) -> dict[str, Any]:
     final = result if result is not None else audit.get("result", {})
     verify_prepared_retry(config, merged, expected_id=audit["batchId"])
     if not audit.get("exported"):
-        final = export_result(config, merged, final)
+        try:
+            final = export_result(config, merged, final)
+        except PublicationContractError as error:
+            audit["unpublishedResult"] = final
+            final = hold_unpublishable(config, merged, error)
         audit["exported"] = True
         audit["result"] = final
     write_receipt(config, merged, final)
