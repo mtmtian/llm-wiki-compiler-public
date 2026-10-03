@@ -26,6 +26,19 @@ EMPTY_ACKS = re.compile(r"^(?:嗯+|哦+|好+|收到|了解|谢谢|thx|thanks|ok(
 ACK_INSTRUCTION = re.compile(
     r"^(?:请)?(?:只)?(?:回复|回答|说|输出)[：:\s]*(?:好(?:的)?|收到|了解|ok(?:ay)?)[。！!,.，\s]*$", re.I)
 EXPLICIT_CONFIRMATION = re.compile(r"^(?:确认|同意|按这个|照这个|就这样|yes)(?:[，。！!、\s].*)?$", re.I)
+# Host blocks that arrive with the user role but are written by the runtime, not the user.
+HOST_INJECTED_BLOCK = re.compile(
+    r"<(task-notification|heartbeat|external_codex_apps_open_page|environment_context)\b[^>]*>.*?</\1>", re.S)
+
+
+def _evidence_kind(role: str, text: str) -> str:
+    """A user-role message made only of host blocks is run artifact, never the user's words.
+
+    Any remaining text of the user's own keeps the whole message as user evidence.
+    """
+    if role != "user" or not HOST_INJECTED_BLOCK.search(text):
+        return role
+    return "artifact" if not HOST_INJECTED_BLOCK.sub("", text).strip() else role
 
 
 def _item(role: str, text: str, identifier: str, locator: str, observed: str,
@@ -33,7 +46,7 @@ def _item(role: str, text: str, identifier: str, locator: str, observed: str,
           status: str = "observed") -> dict[str, Any]:
     """Create the stable, redacted evidence shape shared by both sources."""
     value = safe_text(text, MAX_ITEM_CHARS).strip()
-    return {"id": "codex-" + digest(identifier)[:24], "kind": role, "text": value,
+    return {"id": "codex-" + digest(identifier)[:24], "kind": _evidence_kind(role, value), "text": value,
             "locator": locator, "sha256": digest(value), "observedAt": observed,
             "current": current, "historical": historical, "evidenceStatus": status}
 
