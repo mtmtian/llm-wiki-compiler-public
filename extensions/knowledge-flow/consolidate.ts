@@ -25,7 +25,7 @@ interface TopicReview {
   checkedClaimIndexes: number[];
   checkedPageIds: string[];
   checkedRetiredCitations?: string[];
-  /** Optional on reviews cached before per-claim conclusions existed. */
+  /** Optional to the program: nothing depends on it until the ledger gate (claim-decisions.ts). */
   claimDecisions?: ClaimDecision[];
 }
 

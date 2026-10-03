@@ -27,8 +27,8 @@ const verdict = { enum: ["accept", "reject", "needs_review"] };
  * schema still requires the property, so the reviewer always returns it.
  */
 const MAX_CLAIM_DECISIONS = 20;
-const claimDecisions = (claimIndex: Record<string, unknown>) =>
-  array(object({ claimIndex, decision: verdict, reason: text(2000) }), MAX_CLAIM_DECISIONS);
+const claimDecisions = (claimIndex: Record<string, unknown>, maxItems = MAX_CLAIM_DECISIONS) =>
+  array(object({ claimIndex, decision: verdict, reason: text(2000) }), maxItems);
 const reviewOutput = object({ decision: verdict, reason: text(2000),
   checkedClaimIndexes: array(index, 5), checkedPageIds: array(text(180), 5) },
   { checkedRetiredCitations: array(text(1024), 500), claimDecisions: claimDecisions(index) });
@@ -175,5 +175,5 @@ export function createTopicReviewTool(claimCount: number, pageIds: readonly stri
       checkedClaimIndexes: array(allowedIndexes(claimIndexes), Math.min(5, claimIndexes.length)),
       checkedPageIds: array(pageSchema, Math.min(5, pageIds.length)) },
     { checkedRetiredCitations: array(retirementSchema, Math.min(500, retirementCitations.length)),
-      claimDecisions: claimDecisions(allowedIndexes(claimIndexes)) }) };
+      claimDecisions: claimDecisions(allowedIndexes(claimIndexes), claimCount ? MAX_CLAIM_DECISIONS : 0) }) };
 }

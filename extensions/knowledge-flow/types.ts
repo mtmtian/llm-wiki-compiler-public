@@ -111,7 +111,6 @@ export interface FlowReviewDecision {
   conflictingPageIds: string[];
 }
 
-/** Result returned to the host route. */
 /** A reviewer's conclusion on one claim; the page-level decision still decides the outcome. */
 export interface ClaimDecision {
   claimIndex: number;
@@ -130,6 +129,7 @@ export interface ClaimReview {
   claims: ClaimDecision[];
 }
 
+/** Result returned to the host route. */
 export interface FlowResult {
   status: "published" | "submitted" | "empty" | "needs_review" | "error";
   publishedPageIds: string[];

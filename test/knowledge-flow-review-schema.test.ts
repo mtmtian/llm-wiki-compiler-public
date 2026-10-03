@@ -21,7 +21,8 @@ it.each([
   { claims: 0, pages: [], retired: [] },
 ])("Given an empty review scope $claims/$pages/$retired, When sent to Codex, Then wire schema supports emptiness without allowing invented coverage", async ({ claims, pages, retired }) => {
   const review = { decision: "accept", reason: "checked", checkedClaimIndexes: claims ? [0] : [],
-    checkedPageIds: pages, checkedRetiredCitations: retired };
+    checkedPageIds: pages, checkedRetiredCitations: retired,
+    claimDecisions: claims ? [{ claimIndex: 0, decision: "accept", reason: "supported" }] : [] };
   const tool = createTopicReviewTool(claims, pages, retired);
   const fake = await installFakeCodex({ toolOutput: review }); fakes.push(fake);
   vi.stubEnv("PATH", `${fake.binDir}${path.delimiter}${process.env.PATH ?? ""}`);
@@ -36,5 +37,9 @@ it.each([
     expect(accepts({ ...review, checkedClaimIndexes: [claims] })).toBe(false);
     expect(accepts({ ...review, checkedPageIds: ["concepts/invented"] })).toBe(false);
     expect(accepts({ ...review, checkedRetiredCitations: ["^[invented.md:1]"] })).toBe(false);
+    expect(accepts({ ...review, claimDecisions: [{ claimIndex: claims, decision: "accept", reason: "invented" }] })).toBe(false);
   }
+  const { claimDecisions: _omitted, ...withoutConclusions } = review;
+  expect(validate(withoutConclusions)).toBe(true);
+  expect(wireValidate(withoutConclusions)).toBe(false);
 });
