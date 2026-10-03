@@ -255,6 +255,9 @@ topic/decisionObject，避免模型改写引用、把片段配到错误来源或
 初稿格式错误仍进入原有的一次纠正，纠正失败继续待审。审核回执只允许列出本次实际修改页、claim 和退役引用，不能把目录中未修改的页面列作已审核。
 纠正输出按主证据角色限制 `kind`、`status` 和补充证据范围：assistant 只能形成历史 lesson，
 artifact 只能形成历史事实、约束或经验；只有用户主证据可选择 assistant 补充引文。
+宿主以 user 角色注入、但并非用户本人输入的消息（后台任务通知 `<task-notification>`、自动化心跳 `<heartbeat>`、
+页面事件 `<external_codex_apps_open_page>`、环境上下文 `<environment_context>`），若整条消息只由这些块组成，采集时记为 artifact 证据；
+消息里还有用户自己的文字时仍按 user 证据处理。
 结构约束通过仍须经过原文校验与独立全文审核，真实的事实矛盾和未确认决策会继续待审。
 草稿阶段与发布阶段使用相同的证据角色约束：assistant 补充引文只能解释用户主证据，
 不能给另一条 assistant 或文件主证据增加决策权限；不合规组合先纠正，再独立审核。
