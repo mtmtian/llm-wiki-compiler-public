@@ -7,7 +7,7 @@ import { DURABLE_KNOWLEDGE_POLICY } from "../../src/compiler/knowledge-policy.js
 import { CodexAgentProvider } from "../../src/providers/codex-agent.js";
 import type { LLMProvider } from "../../src/utils/provider.js";
 import type { ClaimDecision, ClaimReview, FlowConfig, FlowJob, FlowResult } from "./types.js";
-import { claimReview, finishResult } from "./claim-decisions.js";
+import { claimReview, disputedClaims, finishResult } from "./claim-decisions.js";
 import { createCorrectionEditTool, createPlanTool, createTopicReviewTool, editTool, planTool } from "./consolidation-schema.js";
 import { durableModel } from "./consolidation-model.js";
 import { assertTopicContextBudget, resolvePlan, topicCatalog } from "./consolidation-plan.js";
@@ -19,7 +19,7 @@ import { quoteContribution } from "./contribution.js";
 import { priorSourceContext } from "./consolidation-sources.js";
 import { validateRetirementReferences } from "./citation-retirement.js";
 import { citationChecklist, unaccountedCitations, withRepairedCitations } from "./citation-repair.js";
-import { claimAnchors, withRepairedQuotes } from "./quote-repair.js";
+import { claimAnchors, preserveEvidence, withRepairedQuotes } from "./quote-repair.js";
 
 interface TopicReview {
   decision: "accept" | "reject" | "needs_review";
@@ -104,7 +104,9 @@ async function runEditStage(run: EditRunContext, stage: string | undefined,
   correction: { reason: string; previousDraft: TopicDraft } | undefined): Promise<EditStageResult> {
   const attempt = await draftAttempt(run, stage, correction);
   if (!attempt.ok) return { result: held(run.job, attempt.error, correction?.previousDraft.summary ?? "") };
-  const repaired = withRepairedQuotes(attempt.draft, run.job.evidence);
+  const anchored = correction ? preserveEvidence(attempt.draft, correction.previousDraft, { evidence: run.job.evidence,
+    catalog: run.correctionCatalog, disputed: disputedClaims(run.claimReviews.at(-1)) }) : attempt.draft;
+  const repaired = withRepairedQuotes(anchored, run.job.evidence);
   const draft = withRepairedCitations(withRoleAuthority(repaired, run.job.evidence), run.topic.pages);
   return validateAndReviewStage(run, stage, correction, draft);
 }

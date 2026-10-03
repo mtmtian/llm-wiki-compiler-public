@@ -22,7 +22,7 @@
   "maxJobBytes": 120000,
   "maxProcessEventBytes": 600000,
   "maxContextChars": 2400,
-  "maxDailyJobs": 100,
+  "maxDailyJobs": 300,
   "environment": {
     "LLMWIKI_EMBEDDING_PROVIDER": "ollama",
     "LLMWIKI_EMBEDDING_MODEL": "nomic-embed-text",

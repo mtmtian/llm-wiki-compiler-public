@@ -205,7 +205,7 @@ python3 deployment/install.py --event-worker-action status
 可以停用；显式维护入口仍可用于质量抽查、诊断和补漏。
 Codex 当前不执行 `async: true` command hooks，因此 Stop 注册为同步快速入队。
 从早期共享提案版本升级时，重新运行安装器并在 `/hooks` 信任变更后的 Stop 定义。
-当前部署模板通过 `maxDailyJobs` 设置每 UTC 日最多 100 次处理尝试。v1 的 `unreceipted` 是本机当前可见但未看到回执的
+当前部署模板通过 `maxDailyJobs` 设置每 UTC 日最多 300 次处理尝试；安装以 `--config-source` 指定的配置为准，使用私有配置安装的机器需在其中单独调整。v1 的 `unreceipted` 是本机当前可见但未看到回执的
 提案数量；v2 以 publication 和 replica 状态分别核对，不证明 iCloud 已上传或对方
 已下载。`peers.<machineId>` 为空表示本机尚未看到该机器状态，不能宣称两机已接通。
 
