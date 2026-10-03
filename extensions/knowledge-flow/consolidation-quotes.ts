@@ -17,6 +17,7 @@ export interface CorrectionEvidence {
   sha256: string;
   observedAt: string;
   originalSha256?: string;
+  origin?: FlowEvidence["origin"];
   quoteOptions: QuoteOption[];
 }
 
@@ -25,6 +26,7 @@ export function buildCorrectionEvidence(evidence: readonly FlowEvidence[]): Corr
   return evidence.map(item => ({
     id: item.id, kind: item.kind, locator: item.locator, sha256: item.sha256, observedAt: item.observedAt,
     ...(item.originalSha256 ? { originalSha256: item.originalSha256 } : {}),
+    ...(item.origin ? { origin: item.origin } : {}),
     quoteOptions: splitQuotes(item.id, item.text),
   }));
 }
