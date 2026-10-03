@@ -66,7 +66,8 @@ function sourceLabel(record: PublicationRecord): string {
   return raw.normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 64) || "project";
 }
 
-function strings(value: unknown): string[] {
+/** String items of a frontmatter list; anything else is ignored. */
+export function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
@@ -151,4 +152,5 @@ function applySemanticScope(meta: Record<string, unknown>, prior: Record<string,
     sourceProjectIds: [...sourceProjectIds(prior), record.payload.projectId] });
 }
 
-function firstParagraph(body: string): string { return body.split(/\n\s*\n/).find(line => line.trim() && !line.trim().startsWith("#"))?.trim() ?? body.trim(); }
+/** The first prose paragraph, used as a page summary. */
+export function firstParagraph(body: string): string { return body.split(/\n\s*\n/).find(line => line.trim() && !line.trim().startsWith("#"))?.trim() ?? body.trim(); }

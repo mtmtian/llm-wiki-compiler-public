@@ -1,4 +1,4 @@
-"""Wire contracts for reviewed topic revisions and the one-time vault migration.
+"""Wire contracts for reviewed topic revisions, the one-time vault migration and topic merges.
 
 Topic revisions are complete page candidates.  They carry no frontmatter and
 refer to immutable publication claims by index, allowing the TypeScript
@@ -9,6 +9,7 @@ the immutable baseline or publication records.
 
 from __future__ import annotations
 
+import datetime as _datetime
 import re
 from typing import Any
 
@@ -19,6 +20,8 @@ PLACEHOLDER = re.compile(r"\{\{claim:([0-9]+)\}\}")
 MAX_REVISIONS = 5
 MAX_BODY = 12000
 MAX_PAGES = 1000
+MAX_MERGES = 256
+MAX_ABSORBED = 1024
 
 
 def _bounded_text(value: Any, field: str, limit: int = 160) -> str:
@@ -201,3 +204,68 @@ def validate_topic_migration(value: Any, baseline_id: str, records: list[dict[st
 def canonical_migration(value: dict[str, Any]) -> str:
     """Expose canonical migration bytes for generation identities and tests."""
     return canonical(value)
+
+
+def _merge_time(value: Any) -> str:
+    """Require an ISO-8601 time with an explicit offset; it becomes the merged page's updatedAt."""
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise ValueError("topic merge mergedAt is invalid")
+    try:
+        parsed = _datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        raise ValueError("topic merge mergedAt is invalid") from None
+    if parsed.tzinfo is None:
+        raise ValueError("topic merge mergedAt requires a timezone")
+    return value
+
+
+def _absorbed_records(value: Any, previous_ids: set[str], records: dict[str, dict[str, Any]]) -> list[str]:
+    """Each absorbed record must exist and revise at least one of the merged pages."""
+    if (not isinstance(value, list) or not value or len(value) > MAX_ABSORBED
+            or len(set(value)) != len(value) or any(not is_hash(item) for item in value)):
+        raise ValueError("topic merge absorbedRecordIds are invalid")
+    for record_id in value:
+        payload = (records.get(record_id) or {}).get("payload") or {}
+        revisions = payload.get("topicRevisions") or []
+        if not any(isinstance(item, dict) and item.get("pageId") in previous_ids for item in revisions):
+            raise ValueError("topic merge absorbs a record that revises none of its pages")
+    return sorted(value)
+
+
+def _validate_merge(item: Any, records: dict[str, dict[str, Any]], reserved: set[str]) -> dict[str, Any]:
+    """Validate one merge: a surviving page among at least two previous pages, none merged twice."""
+    required = {"pageId", "title", "topic", "decisionObject", "body", "previousPages",
+                "absorbedRecordIds", "mergedAt", "reason"}
+    if not isinstance(item, dict) or set(item) not in (required, required | {"citationRetirements"}):
+        raise ValueError("topic merge fields are invalid")
+    previous = _previous_pages(item["previousPages"])
+    previous_ids = {entry["pageId"] for entry in previous}
+    page_id = _page_id(item["pageId"])
+    if len(previous) < 2 or page_id not in previous_ids or reserved.intersection(previous_ids):
+        raise ValueError("topic merge pages are invalid")
+    merge = {"pageId": page_id, "title": _bounded_text(item["title"], "title"),
+             "topic": _bounded_text(item["topic"], "topic"),
+             "decisionObject": _bounded_text(item["decisionObject"], "decisionObject"),
+             "body": _body(item["body"]), "previousPages": previous,
+             "absorbedRecordIds": _absorbed_records(item["absorbedRecordIds"], previous_ids, records),
+             "mergedAt": _merge_time(item["mergedAt"]), "reason": _bounded_text(item["reason"], "reason", 1000)}
+    if "citationRetirements" in item:
+        from citation_retirement_contract import validate_citation_retirements
+        merge["citationRetirements"] = validate_citation_retirements(item["citationRetirements"], merge["body"])
+    reserved.update(previous_ids)
+    return merge
+
+
+def validate_topic_merges(value: Any, records: list[dict[str, Any]],
+                          migration: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Validate reviewed merges of revision-layer pages; pages owned by the legacy migration stay out."""
+    if not isinstance(value, list) or not value or len(value) > MAX_MERGES:
+        raise ValueError("topic merges are invalid")
+    known = {item.get("id"): item for item in records if isinstance(item, dict)}
+    reserved: set[str] = set()
+    for page in (migration or {}).get("pages", []):
+        reserved.update([page["pageId"], *(entry["pageId"] for entry in page["previousPages"])])
+    reserved.update(page["pageId"] for page in (migration or {}).get("retiredPages", []))
+    merges = [_validate_merge(item, known, reserved) for item in value]
+    return sorted(merges, key=lambda item: item["pageId"])
+

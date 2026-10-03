@@ -94,6 +94,8 @@ publication 是同步与证据身份，主题页是知识组织单位；保留�
 ## 全库受审整理与纯过程页退役
 
 沿用 exchange 的 `v2/topic-routes.json` version 2 envelope 和其中的 migration。
+由整页修订创建的页面不能用 migration 合并（重放会按原创建记录重建旧页），改用 version 3 envelope 的 `merges`：
+同一长期决策对象的多个页面并入一个存活页，被吸收的修订记录、旧页 hash 和受审正文一起声明，旧引用同样完整保留或明确退役。
 每个 migration page 可以使用相同的 `citationRetirements`，其他旧引用仍须完整保留。
 纯过程页可以通过 `migration.retiredPages` 逐页声明：
 

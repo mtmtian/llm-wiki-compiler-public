@@ -7,7 +7,7 @@
  */
 
 import type { LLMProvider } from "../../src/utils/provider.js";
-import type { TopicRevision, TopicMigration } from "./topic-revision-types.js";
+import type { TopicMerge, TopicRevision, TopicMigration } from "./topic-revision-types.js";
 
 /** Hard ceiling shared by extraction, review schemas, and publication guards. */
 export const MAX_PROPOSALS = 5;
@@ -69,6 +69,8 @@ export interface FlowConfig {
   /** Reviewed historical routing snapshot supplied by replica sync. */
   topicRoutes?: TopicRouteGroup[];
   topicMigration?: TopicMigration;
+  /** Reviewed merges of revision-layer pages, applied between earlier and later revisions (topic-merge.ts). */
+  topicMerges?: TopicMerge[];
   sessionConsolidation?: { enabled?: boolean; quietSeconds?: number; maxWaitSeconds?: number };
   publishEnabled?: boolean;
   sharedWikiRoot?: string;
