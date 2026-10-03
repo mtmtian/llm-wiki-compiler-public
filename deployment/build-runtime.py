@@ -63,7 +63,7 @@ def main():
     try:
         build(repo, staging)
         files = list((staging / 'knowledge-flow').glob('*')) + [staging / 'dist/cli.js', staging / 'alma-session.py', staging / 'package-lock.json']
-        manifest = {'commit': sha, 'capabilities': ['semantic-topic-revisions-v1'],
+        manifest = {'commit': sha, 'capabilities': ['semantic-topic-revisions-v1', 'knowledge-ledger-v1'],
                     'files': {str(p.relative_to(staging)): hashlib.sha256(p.read_bytes()).hexdigest()
                                            for p in files if p.is_file()}}
         (staging / 'build-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

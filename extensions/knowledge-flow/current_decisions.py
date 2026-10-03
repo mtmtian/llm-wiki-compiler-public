@@ -5,11 +5,13 @@ work, without retrieval or a model call. It reads only publications that are
 fully visible in the active local replica (``replica/status.json``) from the
 private cache of verified packets (``replica-records``), and writes nothing.
 
-Publications carry no reliable supersession marker, so nothing is dropped as
-"replaced". Items are grouped by decision object, groups and items are ordered
-newest first, and every line keeps its record date: a later decision on the
-same object is read before an older one, and the agent can judge staleness.
-Exact duplicate statements are shown once.
+Ledger records may mark earlier decided claims as superseded; those are left
+out, and a ledger record with an invalid reference is ignored as a whole (the
+rules live in ``ledger.py``).  Nothing else is dropped as "replaced". Items are
+grouped by decision object, groups and items are ordered newest first, and every
+line keeps its record date: a later decision on the same object is read before
+an older one, and the agent can judge staleness. Exact duplicate statements are
+shown once.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from common import digest, load_json, safe_text
+from ledger import decision_subject, resolve
 
 MAX_CHARS = 1400
 MAX_ITEM_CHARS = 200
@@ -39,18 +42,29 @@ def current_decisions(config: dict[str, Any], project: str) -> tuple[str, str]:
 
 
 def _decided_items(state: Path, project: str) -> list[dict[str, str]]:
-    """Collect decided decisions and constraints from visible records, newest first."""
+    """Collect current decided decisions and constraints from visible records, newest first."""
+    payloads = _visible_payloads(state, project)
+    rejected, superseded = resolve(payloads)
+    items: list[dict[str, str]] = []
+    for record_id, payload in payloads.items():
+        if record_id not in rejected:
+            items.extend(_claim_items(record_id, payload, superseded))
+    return sorted(items, key=lambda item: item["date"], reverse=True)
+
+
+def _visible_payloads(state: Path, project: str) -> dict[str, dict[str, Any]]:
+    """The project's fully visible verified payloads, keyed by record id in replica order."""
     visible = _read_object(state / "replica" / "status.json").get("fullyVisibleRecordIds")
     if not isinstance(visible, list):
-        return []
-    items: list[dict[str, str]] = []
+        return {}
+    payloads: dict[str, dict[str, Any]] = {}
     for record_id in visible:
         if not isinstance(record_id, str) or not RECORD_ID.fullmatch(record_id):
             continue
         payload = _read_object(state / "replica-records" / f"{record_id}.json").get("payload")
         if isinstance(payload, dict) and payload.get("projectId") == project:
-            items.extend(_claim_items(payload))
-    return sorted(items, key=lambda item: item["date"], reverse=True)
+            payloads[record_id] = payload
+    return payloads
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -62,15 +76,16 @@ def _read_object(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _claim_items(payload: dict[str, Any]) -> list[dict[str, str]]:
-    """Keep only decided decision/constraint claims with visible text."""
+def _claim_items(record_id: str, payload: dict[str, Any], superseded: set[str]) -> list[dict[str, str]]:
+    """Keep only decided decision/constraint claims with visible text that nothing supersedes."""
     date = str(payload.get("createdAt", ""))[:10]
     result = []
-    for claim in payload.get("claims", []):
-        if not isinstance(claim, dict) or claim.get("status") != "decided" or claim.get("kind") not in KIND_LABELS:
+    for index, claim in enumerate(payload.get("claims", [])):
+        if (not isinstance(claim, dict) or claim.get("status") != "decided" or claim.get("kind") not in KIND_LABELS
+                or f"{record_id}:{index}" in superseded):
             continue
         text = safe_text(claim.get("text"), MAX_ITEM_CHARS).strip()
-        subject = str(claim.get("decisionObject") or claim.get("topic") or "其他").strip()
+        subject = decision_subject(claim) or "其他"
         if text:
             result.append({"date": date, "kind": KIND_LABELS[claim["kind"]], "subject": subject, "text": text})
     return result

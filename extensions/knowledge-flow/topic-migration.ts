@@ -4,6 +4,7 @@ import { parseQualifiedPageId } from "../../src/utils/page-id.js";
 import { sha256Text } from "../../src/connectors/hash.js";
 import type { FlowConfig } from "./types.js";
 import type { PublicationRecord, PublicationConflict } from "./publication-types.js";
+import { rendersAsFragment } from "./publication-types.js";
 import type { TopicMigration, TopicMigrationPage } from "./topic-revision-types.js";
 import { validateCitationChanges, validateRetirementShape } from "./citation-retirement.js";
 import { retirePageProvenance } from "./retirement-projection.js";
@@ -25,7 +26,7 @@ export function applyTopicMigration(config: FlowConfig, migration: TopicMigratio
   const byId = new Map(records.map(record => [record.id, record]));
   if (byId.size !== records.length) throw new Error("duplicate publication identity");
   requireBasisRecords(migration, byId);
-  const extras = records.filter(record => !migration.basisRecordIds.includes(record.id) && !record.payload.topicRevisions?.length);
+  const extras = records.filter(record => !migration.basisRecordIds.includes(record.id) && rendersAsFragment(record));
   const heldExtras = extras.filter(record => touchesMigration(record, migration.pages)
     || record.payload.claims.some(claim => migration.retiredPages?.some(page => claim.targetPageId === page.pageId)));
   const conflicts = heldExtras.map(record => ({

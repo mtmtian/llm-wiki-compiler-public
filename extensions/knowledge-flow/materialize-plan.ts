@@ -8,6 +8,7 @@ import { parseFrontmatter, slugify } from "../../src/utils/markdown.js";
 import { acceptedPublicationClaims } from "./publication-validation.js";
 import type { FlowConfig } from "./types.js";
 import type { PublicationConflict, PublicationEntry, PublicationRecord, TopicPage } from "./publication-types.js";
+import { rendersAsFragment } from "./publication-types.js";
 
 /** Canonical keys ignore whitespace/case, but do not infer semantic synonyms. */
 function normalized(value: string): string {
@@ -22,7 +23,7 @@ function topicKey(project: string, topic: string, object: string): string {
 /** Validate every publication before making any derived file visible. */
 export function publicationEntries(records: PublicationRecord[]): PublicationEntry[] {
   return orderedRecords(records).flatMap(record => {
-    if (record.payload.topicRevisions?.length) return [];
+    if (!rendersAsFragment(record)) return [];
     const value = record.payload;
     const targets = value.claims.flatMap(claim => claim.targetPageId ? [claim.targetPageId] : []);
     const claims = acceptedPublicationClaims(record, targets);

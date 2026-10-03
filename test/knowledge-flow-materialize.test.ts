@@ -51,6 +51,19 @@ describe("immutable publication local views", () => {
     expect(await readFile(path.join(config.wikiRoot, "wiki/index.md"), "utf8")).not.toContain("Deploy without approval");
   });
 
+  it("Given a ledger record beside a legacy one, When replayed, Then it never becomes page text or a conflict", async () => {
+    const legacy = record("a", "Deploy only after approval");
+    const ledger = record("c", "Deploy without approval", "b"); ledger.payload.version = 3;
+    expect(publicationConflicts([legacy, ledger])).toEqual([]);
+    const config = await fixture();
+    const result = await materializeRecords(config, [legacy, ledger]);
+    expect(result.pages).toBe(1); expect(result.conflicts).toEqual([]);
+    const files = (await readdir(config.wikiRoot, { recursive: true, withFileTypes: true })).filter(entry => entry.isFile());
+    const texts = await Promise.all(files.map(entry => readFile(path.join(entry.parentPath, entry.name), "utf8")));
+    expect(texts.join("\n")).toContain("Deploy only after approval");
+    expect(texts.join("\n")).not.toContain("Deploy without approval");
+  });
+
   it("Given independent topics, When two machines replay the same records, Then page and source contents agree", async () => {
     const records = [record("a", "Deploy after approval"), record("b", "Keep stable project IDs", "b", [], "identity")];
     const left = await fixture(); const right = await fixture();
