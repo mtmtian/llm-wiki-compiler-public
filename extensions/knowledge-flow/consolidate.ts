@@ -146,12 +146,23 @@ async function acceptedClaimsOnly(run: EditRunContext, draft: TopicDraft, review
   const heldWith = (note?: string) => held(run.job, note ? `${review.reason}；只保留已接受的 claim 后${note}` : review.reason, draft.summary);
   const pruned = withoutRejectedClaims(draft, run.claimReviews.at(-1));
   if (!pruned) return heldWith();
+  // Pages whose claims were all rejected keep their current text, so validation, the fresh review and its
+  // coverage apply to the remaining pages. This is the run's last step; the same run keeps the review record.
+  run.topic = narrowedTopic(run.topic, pruned);
   let outcome: ReviewedDraft;
   try { outcome = await reviewedDraft(run, PRUNED_STAGE, pruned); }
   catch (error) { return heldWith(`审核失败：${errorMessage(error)}`); }
   if ("error" in outcome) return heldWith(`未通过校验：${outcome.error}`);
   if (outcome.review.decision !== "accept") return heldWith(`仍未通过审核：${outcome.review.reason}`);
   return acceptedReview(run.job, pruned.summary, outcome.review, outcome.contribution, run.topic.pages);
+}
+
+/** The topic restricted to the pages a draft revises; plan pages and planned pages correspond by position (resolvePlan). */
+function narrowedTopic(topic: EditContext, draft: TopicDraft): EditContext {
+  const revised = new Set(draft.pages.map(page => page.pageId));
+  const kept = topic.pages.flatMap((page, index) => revised.has(page.pageId) ? [index] : []);
+  return { ...topic, pages: kept.map(index => topic.pages[index]),
+    plan: { ...topic.plan, pages: kept.map(index => topic.plan.pages[index]) } };
 }
 
 function validationFailure(run: EditRunContext, stage: string | undefined, correction: { reason: string; previousDraft: TopicDraft } | undefined,
