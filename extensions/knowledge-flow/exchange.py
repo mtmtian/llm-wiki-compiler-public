@@ -151,14 +151,14 @@ def read_packet(path, machine, exchange):
     return packet
 
 
-def project_allowed(payload, config):
+def project_allowed(payload, config, allow_archived=False):
     """Re-establish publisher-side project ownership; never accept sender paths."""
     project = payload.get("projectId")
     if project in config["projects"]:
         return True
     identity = payload.get("repoIdentity")
     return (isinstance(identity, str) and project == "repo-" + identity.replace("/", "-")
-            and eligible_repo(identity, config))
+            and eligible_repo(identity, config, allow_archived=allow_archived))
 
 
 def incoming_job(packet, config):

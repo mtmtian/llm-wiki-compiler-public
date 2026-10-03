@@ -337,10 +337,13 @@ def _publication_payload(config: dict[str, Any], job: dict[str, Any], result: di
 
 
 def _project_is_allowed(payload: dict[str, Any], config: dict[str, Any]) -> bool:
-    """Apply the existing publisher-side project ownership rules to v2 records."""
+    """Apply the existing publisher-side project ownership rules to v2 records.
+
+    Published history stays readable after its repository is archived.
+    """
     try:
         from exchange import project_allowed
-        return bool(project_allowed(payload, config))
+        return bool(project_allowed(payload, config, allow_archived=True))
     except (ImportError, KeyError, TypeError, ValueError):
         return False
 
