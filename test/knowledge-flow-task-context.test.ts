@@ -90,15 +90,17 @@ describe("knowledge-flow current task context contract", () => {
     expect(curation.length).toBeGreaterThan(0);
     const planning = harness.calls.find(call => call.tool === "knowledge_topic_plan")!;
     expect(planning.request.currentTaskContext).toBe(TASK);
-    expect(planning.request.originalEvidence).toEqual([evidence()]);
+    // Every stage sees the evidence exactly, tagged as evidence of the turns consolidated now.
+    const tagged = [{ ...evidence(), origin: "current" as const }];
+    expect(planning.request.originalEvidence).toEqual(tagged);
     for (const call of curation) expect(call.request.currentTaskContext).toBe(TASK);
     expect(harness.calls.some(call => call.tool === "knowledge_topic_edit" && call.request.correction)).toBe(true);
     const initialEdits = harness.calls.filter(call => call.tool === "knowledge_topic_edit" && !call.request.correction);
     const reviews = harness.calls.filter(call => call.tool === "knowledge_topic_review");
-    expect(initialEdits.every(call => JSON.stringify(call.request.evidence) === JSON.stringify([evidence()]))).toBe(true);
-    expect(reviews.every(call => JSON.stringify(call.request.evidence) === JSON.stringify([evidence()]))).toBe(true);
+    expect(initialEdits.every(call => JSON.stringify(call.request.evidence) === JSON.stringify(tagged))).toBe(true);
+    expect(reviews.every(call => JSON.stringify(call.request.evidence) === JSON.stringify(tagged))).toBe(true);
     const correctionEdits = harness.calls.filter(call => call.tool === "knowledge_topic_edit" && call.request.correction);
-    const expectedCatalog = buildCorrectionEvidence([evidence()]);
+    const expectedCatalog = buildCorrectionEvidence(tagged);
     expect(correctionEdits.every(call => JSON.stringify(call.request.evidence) === JSON.stringify(expectedCatalog))).toBe(true);
     for (const call of harness.calls) {
       if (["knowledge_topic_plan", "knowledge_topic_edit", "knowledge_topic_review"].includes(call.tool)) {

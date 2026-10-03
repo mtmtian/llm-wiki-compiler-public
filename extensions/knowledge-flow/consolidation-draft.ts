@@ -47,15 +47,22 @@ function resolveCorrectionClaim(claim: CorrectionClaim, catalog: readonly Correc
     evidenceId: primary.evidenceId, quote: primary.quote, supportingQuotes };
 }
 
-/** Summaries are never evidence. Retained context carries the original role, text and hash. */
+/**
+ * Summaries are never evidence. Retained context carries the original role, text and hash, and each
+ * item is marked as evidence of the turns consolidated now ("current") or earlier session context.
+ */
 export function withSessionEvidence(job: FlowJob): FlowJob {
+  const identity = (item: FlowEvidence) => JSON.stringify([item.id, item.kind, item.sha256, item.locator]);
+  const current = new Set(job.evidence.map(identity));
   const originals = [...(job.sessionContext?.evidence ?? []), ...job.evidence];
-  const unique = [...new Map(originals.map(item => [JSON.stringify([item.id, item.kind, item.sha256, item.locator]), item])).values()];
+  const unique = [...new Map(originals.map(item => [identity(item), item])).values()];
   if (unique.length > 500 || unique.reduce((total, item) => total + item.text.length, 0) > 200_000) {
     throw new Error("session evidence exceeds review budget; consume a smaller frozen batch");
   }
-  const evidence = unique.map(item => unique.some(other => other !== item && other.id === item.id)
-    ? { ...item, id: `e-${sha256Text(JSON.stringify(item)).slice(0, 32)}` } : item);
+  const evidence = unique.map(item => ({
+    ...(unique.some(other => other !== item && other.id === item.id)
+      ? { ...item, id: `e-${sha256Text(JSON.stringify(item)).slice(0, 32)}` } : item),
+    origin: current.has(identity(item)) ? "current" as const : "earlier" as const }));
   return { ...job, evidence };
 }
 

@@ -61,6 +61,7 @@ evidence; if they cannot be represented safely, the batch remains held.
 Each reviewed revision contains `pageId`, stable `topicId`, title/topic/object,
 the complete previous page `basisHash` (null for creation), Markdown `body`, and
 `claimIndexes`. Draft placeholders `{{claim:N}}` become exact quote citations.
+Every evidence item shown to the planner, editor and reviewer is marked `origin: current` (the turns being consolidated) or `origin: earlier` (session context). The editor chooses each claim's primary quote first and restates only what that quote says, citing earlier evidence as primary only when it states the claim; the marker is prompt-only and never appears in published evidence.
 The independent reviewer can accept an explicit user change while preserving useful
 prior rationale, constraints and counterexamples. It holds unresolved conflicts and uncertain
 intent. Multi-turn approvals retain both original proposal and approval quotes.

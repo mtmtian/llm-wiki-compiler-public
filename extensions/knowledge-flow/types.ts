@@ -22,6 +22,8 @@ export interface FlowEvidence {
   observedAt: string;
   /** Hash of the complete sanitized original, retained when sharing only a quote. */
   originalSha256?: string;
+  /** Prompt-only: from the turns consolidated now ("current") or earlier session context; never published. */
+  origin?: "current" | "earlier";
 }
 
 /** One completed project task presented to the knowledge flow. */
