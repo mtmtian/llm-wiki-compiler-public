@@ -15,6 +15,8 @@ export interface CitationRetirement {
 }
 
 const markerPattern = /^\^\[[^\]\r\n]+\]$/;
+// Diagnostics feed the bounded correction prompt; list enough markers to act on, not all of them.
+const MAX_LISTED_MARKERS = 10;
 const placeholderPattern = /^\{\{claim:[0-4]\}\}$/;
 const retirementSchema = z.array(z.object({
   citation: z.string().max(1024).regex(markerPattern),
@@ -34,7 +36,7 @@ export function validateRetirementShape(value: unknown, body: string, claimIndex
   if (!parsed.success) throw new Error("invalid citation retirements");
   const seen = new Set<string>();
   for (const item of parsed.data) {
-    if (seen.has(item.citation) || body.includes(item.citation)) throw new Error("retired citation is duplicated or still present");
+    if (seen.has(item.citation) || body.includes(item.citation)) throw new Error(`retired citation is duplicated or still present: ${item.citation}`);
     if (!validReplacement(item.replacement, claimIndexes)) {
       throw new Error(`retired citation ${item.citation} has invalid replacement literal ${JSON.stringify(item.replacement)}; use one exact citation, one {{claim:N}} marker in this page, or one HTTPS URL supported by supplied evidence`);
     }
@@ -65,6 +67,13 @@ export function validRetirementUrl(value: string): boolean {
   } catch { return false; }
 }
 
+/** Name the offending markers so a correction can act on them; the prefix stays stable for classifiers. */
+function markerList(markers: string[]): string {
+  const listed = markers.slice(0, MAX_LISTED_MARKERS).join(", ");
+  const rest = markers.length - MAX_LISTED_MARKERS;
+  return rest > 0 ? `${listed} (+${rest} more)` : listed;
+}
+
 /** Reject silent loss, invented old citations, and retirement of unrelated evidence. */
 export function validateCitationChanges(previous: string[], body: string, value?: CitationRetirement[],
   options: { newMarkers?: string[]; claimIndexes?: number[] } = {}): void {
@@ -72,9 +81,15 @@ export function validateCitationChanges(previous: string[], body: string, value?
   const before = new Set(previous.flatMap(citationMarkers));
   const after = new Set(citationMarkers(body));
   const retired = new Set(retirements.map(item => item.citation));
-  for (const item of retirements) if (!before.has(item.citation)) throw new Error("retired citation is outside the reviewed basis");
-  for (const marker of before) if (!after.has(marker) && !retired.has(marker)) throw new Error("topic edit dropped existing evidence citation without reviewed retirement");
-  for (const marker of after) if (!before.has(marker) && !options.newMarkers?.includes(marker)) throw new Error("topic edit invented an existing evidence citation");
+  const outside = retirements.find(item => !before.has(item.citation));
+  if (outside) throw new Error(`retired citation is outside the reviewed basis: ${outside.citation}`);
+  const dropped = [...before].filter(marker => !after.has(marker) && !retired.has(marker));
+  if (dropped.length) {
+    throw new Error(`topic edit dropped existing evidence citation without reviewed retirement: ${markerList(dropped)}; `
+      + "keep each marker in the revised body, or declare it in citationRetirements with a surviving replacement");
+  }
+  const invented = [...after].filter(marker => !before.has(marker) && !options.newMarkers?.includes(marker));
+  if (invented.length) throw new Error(`topic edit invented an existing evidence citation: ${markerList(invented)}`);
 }
 
 /** Model-proposed external references must be present in actual supplied evidence. */

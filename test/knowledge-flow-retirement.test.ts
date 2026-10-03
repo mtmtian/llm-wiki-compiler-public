@@ -156,6 +156,31 @@ describe("reviewed evidence retirement", () => {
     }], { claimIndexes: [0] })).toThrow(/replacement literal.*not present in revised body/);
   });
 
+  it("Given silently dropped markers, When correction runs, Then the diagnostic names every dropped marker and how to fix it", () => {
+    const previous = "A ^[a.md:1] B ^[b.md:2] C ^[c.md:3]";
+    expect(() => validateCitationChanges([previous], "B ^[b.md:2]"))
+      .toThrow(/dropped existing evidence citation without reviewed retirement: \^\[a\.md:1\], \^\[c\.md:3\];.*citationRetirements/);
+  });
+
+  it("Given an invented old marker, When correction runs, Then the diagnostic names it", () => {
+    expect(() => validateCitationChanges(["Keep ^[keep.md:1]"], "Keep ^[keep.md:1] New ^[guess.md:9]"))
+      .toThrow(/invented an existing evidence citation: \^\[guess\.md:9\]/);
+  });
+
+  it("Given a retirement outside the basis or still in the body, When correction runs, Then the diagnostic names that citation", () => {
+    const outside = { citation: "^[missing.md:1]", reason: "未知旧引用", replacement: "^[keep.md:2]" };
+    expect(() => validateCitationChanges(["Keep ^[keep.md:2]"], "Keep ^[keep.md:2]", [outside]))
+      .toThrow(/outside the reviewed basis: \^\[missing\.md:1\]/);
+    const kept = { citation: "^[old.md:1]", reason: "旧过程结束", replacement: "^[keep.md:2]" };
+    expect(() => validateCitationChanges(["Old ^[old.md:1] Keep ^[keep.md:2]"], "Old ^[old.md:1] Keep ^[keep.md:2]", [kept]))
+      .toThrow(/duplicated or still present: \^\[old\.md:1\]/);
+  });
+
+  it("Given many dropped markers, Then the diagnostic stays bounded and counts the rest", () => {
+    const previous = Array.from({ length: 12 }, (_, index) => `^[p${index}.md:1]`).join(" ");
+    expect(() => validateCitationChanges([previous], "nothing kept")).toThrow(/\^\[p9\.md:1\] \(\+2 more\)/);
+  });
+
   it("Given a guessed external record, Then model curation is rejected until original evidence supports it", () => {
     const item = { citation: "^[old.md:1]", reason: "已结束的过程", replacement: url };
     expect(() => validateRetirementReferences([item], ["PR #7"])).toThrow(/original evidence/);
