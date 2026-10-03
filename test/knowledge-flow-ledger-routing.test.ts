@@ -1,7 +1,8 @@
 /**
  * With the knowledge ledger enabled, a held batch carries the claims its final review accepted
  * (deployment/KNOWLEDGE-LEDGER.md §7.2, step B3b). Only accepted claims and the evidence they cite
- * travel; the batch itself stays held, and every other outcome is unchanged.
+ * travel; the batch itself stays held, and every other outcome is unchanged. A held page is first retried
+ * with its accepted claims alone (claim-pruning.ts); these scenarios hold that reduced page too.
  */
 import { describe, expect, it } from "vitest";
 import { consolidateSession } from "../extensions/knowledge-flow/consolidate.js";
@@ -32,6 +33,9 @@ const verdict = (claimIndex: number, decision: string) => ({ claimIndex, decisio
 const held = (claimDecisions?: unknown[]) =>
   ({ ...accepted(), checkedClaimIndexes: [0, 1], decision: "needs_review", reason: "页面合并需人工确认",
     ...(claimDecisions ? { claimDecisions } : {}) });
+/** Hold the two-claim page, then hold the page reduced to claim 0 while still accepting that claim. */
+const heldTwice = (claimDecisions: unknown[]) => (request: any) => request.claims.length === 2 ? held(claimDecisions)
+  : { ...accepted(), decision: "needs_review", reason: "精简后的页面仍需人工确认", claimDecisions: [verdict(0, "accept")] };
 
 async function consolidate(review: unknown, knowledgeLedger = true): Promise<FlowResult> {
   const runtime = { ...config({ knowledge_topic_plan: plan(), knowledge_topic_edit: twoClaimDraft(), knowledge_topic_review: review }),
@@ -41,7 +45,7 @@ async function consolidate(review: unknown, knowledgeLedger = true): Promise<Flo
 
 describe("partial publication of accepted claims while the batch stays held", () => {
   it("Given an enabled ledger and a held page, Then only the accepted claim and its evidence travel with the hold", async () => {
-    const result = await consolidate(held([verdict(0, "accept"), verdict(1, "reject")]));
+    const result = await consolidate(heldTwice([verdict(0, "accept"), verdict(1, "reject")]));
     expect(result.status).toBe("needs_review");
     expect(result.contribution).toBeUndefined();
     expect(result.ledgerContribution?.claims.map(claim => claim.text)).toEqual([job().prompt]);
@@ -50,7 +54,7 @@ describe("partial publication of accepted claims while the batch stays held", ()
   });
 
   it("Given a disabled ledger, Then the held batch carries no ledger claims", async () => {
-    const result = await consolidate(held([verdict(0, "accept"), verdict(1, "reject")]), false);
+    const result = await consolidate(heldTwice([verdict(0, "accept"), verdict(1, "reject")]), false);
     expect(result.status).toBe("needs_review");
     expect(result.ledgerContribution).toBeUndefined();
   });
