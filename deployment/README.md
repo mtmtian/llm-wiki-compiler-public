@@ -204,7 +204,7 @@ GitHub 仓库，且 owner 或 `workingForks` 允许该仓库。它只删除与�
 
 `enable` 只接受已准备好的本机配置；`bootout` 停止自身 LaunchAgent；`rollback` 先尝试 bootout，再删除自身 plist 和 `~/.local/bin/llmwiki-wake`，不会删除队列、证据、review 或 exchange。`--dry-run` 不运行 `launchctl`。配置缺失或 JSON 损坏时，`bootout`、`status` 和 `rollback` 仍可操作本工具的固定服务标识；只有启用需要有效配置。Linux 或其他平台只生成和检查配置，不会声称事件 worker 已激活。
 
-在 Codex 原生 `/hooks` 信任新建或定义变化后的三个 Wiki hook（UserPromptSubmit、Stop、SessionStart），再新开任务检验项目参考与 Stop 事件。安装器不会伪造信任或绕过原生检查。其他设备或旧版本的验证不能证明当前安装已生效；桌面宿主须在该设备的新任务中另行验证。
+在 Codex 原生 `/hooks` 信任新建或定义变化后的三个 Wiki hook（UserPromptSubmit、Stop、SessionStart），再新开任务检验项目参考与 Stop 事件。安装器不会伪造信任或绕过原生检查。hook 命令调用稳定启动器 `~/.local/bin/llmwiki-codex-hook --config <配置>`，启动器在运行时按配置的 `worker` 找到已安装 runtime 的 `hooks.py`；因此升级 runtime 时 hook 定义和启动器都不变，不需要重新信任。只有首次安装、从旧版（命令中带 runtime 路径）迁移，或配置路径改变时才需要信任一次。其他设备或旧版本的验证不能证明当前安装已生效；桌面宿主须在该设备的新任务中另行验证。
 
 ### 按语义主题组织 Wiki
 
