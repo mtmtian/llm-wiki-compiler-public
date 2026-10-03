@@ -15,10 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from common import digest, load_json, save_json
+from queue_wire import job_bytes
 
 UTC = dt.timezone.utc
 STATE_VERSION = 1
-MAX_EVIDENCE_CHARS = 40_000
+# The evidence window is measured like the job byte limit (UTF-8 JSON, wire escaping). Counting characters
+# let 40,000 CJK characters plus metadata exceed a whole 120,000-byte job, so every later turn of a long
+# session was rejected as JobTooLarge. A third of the default job leaves room for the new turn.
+MAX_EVIDENCE_BYTES = 40_000
 MAX_CURSOR = 1_000
 MAX_BATCHES = 1_000
 
@@ -124,16 +128,12 @@ def is_explicit_consolidation(job: dict[str, Any]) -> bool:
     return bool(re.search(r"整理(?:会话|主题|页面|知识)|(?:总结|归纳|收敛).*(?:会话|主题|知识)|consolidat(?:e|ion)|summari[sz]e", prompt, re.I))
 
 
-def _text_size(item: dict[str, Any]) -> int:
-    return len(str(item.get("text", "")))
-
-
 def _trim_evidence(state: dict[str, Any]) -> dict[str, Any]:
-    """Keep newest original evidence under the convenience-window budget."""
+    """Keep newest original evidence under the convenience-window byte budget."""
     evidence = list(state.get("evidence", []))
-    total = sum(_text_size(item) for item in evidence)
-    while evidence and total > MAX_EVIDENCE_CHARS:
-        total -= _text_size(evidence.pop(0))
+    total = sum(job_bytes(item) for item in evidence)
+    while evidence and total > MAX_EVIDENCE_BYTES:
+        total -= job_bytes(evidence.pop(0))
     state["evidence"] = evidence
     return state
 

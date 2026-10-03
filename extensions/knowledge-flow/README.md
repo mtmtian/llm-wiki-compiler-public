@@ -43,8 +43,9 @@ a private summary, plus a bounded window of original evidence. The summary is
 never a citation. One conversation can continue the next day; other conversations
 can reuse the same topic within the active scope. `sessionConsolidation` configures `enabled`
 (default true), `quietSeconds` (300), and `maxWaitSeconds` (1800). Batch/byte limits
-remain active. Original batch audits retain evidence beyond the 40,000-character
-checkpoint window, without putting whole transcripts into the shared exchange.
+remain active. Original batch audits retain evidence beyond the 40,000-byte
+checkpoint window, without putting whole transcripts into the shared exchange. The window
+is measured like the job byte limit (UTF-8 JSON), so prior evidence alone never fills a job.
 
 Each model stage has a durable input-bound result. Finalization advances the
 checkpoint once, after publication export succeeds. New messages arriving during

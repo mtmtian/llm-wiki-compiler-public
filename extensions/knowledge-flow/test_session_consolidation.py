@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from common import load_json, save_json
+from queue_wire import job_bytes
 import hooks
 import session_state
 from queue_schedule import due_at
@@ -210,7 +211,7 @@ class SessionConsolidationTests(unittest.TestCase):
         state = load_session(self.config, "growth", "session-1")
         self.assertEqual(state["revision"], 3)
         self.assertEqual(state["cursor"], ["0", "1", "2"])
-        self.assertLessEqual(sum(len(item["text"]) for item in state["evidence"]), 40_000)
+        self.assertLessEqual(sum(job_bytes(item) for item in state["evidence"]), session_state.MAX_EVIDENCE_BYTES)
 
     def test_replayed_batch_cannot_overwrite_newer_memory(self):
         """Given a committed batch, When an old result replays, Then its summary is ignored."""
