@@ -2,6 +2,7 @@
 import { CLAIM_SCHEMA } from "./extract.js";
 import type { LLMTool } from "../../src/utils/provider.js";
 import type { CorrectionEvidence } from "./consolidation-quotes.js";
+import { MAX_TOPIC_BODY_CHARS } from "./consolidation-plan.js";
 
 const text = (maxLength: number) => ({ type: "string", minLength: 1, maxLength });
 const object = (properties: Record<string, unknown>, optional: Record<string, unknown> = {}) => ({
@@ -18,7 +19,7 @@ const retirement = object({ citation: text(1024), reason: text(1000),
   // The first draft still enters the existing deterministic correction path;
   // correction retries use the literal-only schema below.
   replacement: text(2048) });
-const pageEdit = object({ pageId: text(180), body: text(12000), claimIndexes: array(index, 5) },
+const pageEdit = object({ pageId: text(180), body: text(MAX_TOPIC_BODY_CHARS), claimIndexes: array(index, 5) },
   { citationRetirements: array(retirement, 500) });
 const verdict = { enum: ["accept", "reject", "needs_review"] };
 /**
@@ -56,7 +57,7 @@ const CORRECTION_KINDS: Record<CorrectionRole, readonly string[]> = {
 };
 
 /** Plan destinations before extracting individual claims. */
-export const planTool: LLMTool = { name: "knowledge_topic_plan", description: "Reuse existing decision objects, or justify a new topic.",
+export const planTool: LLMTool = { name: "knowledge_topic_plan", description: "Reuse the existing workstream page, or justify a new workstream.",
   input_schema: object({ summary: text(4000), disposition: { enum: ["edit", "noop", "needs_review"] }, reason: text(1000),
     pages: array(object({ action: { enum: ["update", "create"] },
       targetPageId: { anyOf: [text(180), { type: "null" }] }, title: text(160), topic: text(160),

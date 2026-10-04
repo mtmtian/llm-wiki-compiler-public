@@ -14,7 +14,7 @@ import { sha256Text } from "../../src/connectors/hash.js";
 import { CodexAgentProvider } from "../../src/providers/codex-agent.js";
 import type { LLMProvider } from "../../src/utils/provider.js";
 import { isSafeFilenameComponent } from "../../src/profile/identity.js";
-import { atomicWrite } from "../../src/utils/markdown.js";
+import { atomicWrite, parseFrontmatter } from "../../src/utils/markdown.js";
 import { confineUnderRoot } from "../../src/utils/path-confine.js";
 import { extractClaims, validateClaims } from "./extract.js";
 import { loadPublishAttempt, publishClaims } from "./publish.js";
@@ -230,11 +230,18 @@ function boundedMax(max: number): number {
   return Number.isInteger(max) ? Math.max(0, Math.min(MAX_PROPOSALS, max)) : 0;
 }
 
+/**
+ * Largest scoped page body a job will read. Frontmatter is excluded: it is generated provenance (sources,
+ * claim and publication references) that grows with every revision and merge, so counting it would let one
+ * long-lived page stop every job that can see it. Prompt size stays bounded by the topic context budget.
+ */
+const MAX_SCOPED_PAGE_BODY_CHARS = 12_000;
+
 async function readAllowedPages(job: FlowJob, wikiRoot: string): Promise<ReadonlyMap<string, string>> {
   const entries = await Promise.all(job.allowedPageIds.map(async (id) => {
     const safe = await confineUnderRoot(path.join("wiki", `${id}.md`), wikiRoot, { mustExist: false });
     const body = await readFile(safe, "utf8");
-    if (body.length > 12000) throw new Error("scoped page exceeds review budget");
+    if (parseFrontmatter(body).body.length > MAX_SCOPED_PAGE_BODY_CHARS) throw new Error("scoped page exceeds review budget");
     return [id, body] as const;
   }));
   const pages = new Map(entries);

@@ -5,6 +5,8 @@ import { sourceProjectIds } from "../../src/utils/topic-scope.js";
 import type { FlowJob } from "./types.js";
 
 export const MAX_TOPIC_CONTEXT_CHARS = 120_000;
+/** Largest editable topic page body; planning splits a workstream page that nears it. */
+export const MAX_TOPIC_BODY_CHARS = 12_000;
 /**
  * A full date (2026-09-24, 2026/9/24, 2026年9月24日) or a standalone month-day batch number (0918) names one action,
  * not a durable topic. A bare year is left alone because annual plans are durable.
@@ -29,13 +31,16 @@ export interface PlannedPage {
   original: string | null;
 }
 
-/** Include summaries of all scoped topics, not a file-name heuristic or only the current session's pages. */
+/**
+ * Include summaries of all scoped topics, not a file-name heuristic or only the current session's pages.
+ * bodyChars lets planning and review see when a workstream page nears the editable body limit.
+ */
 export function topicCatalog(existing: ReadonlyMap<string, string>): unknown[] {
   return [...existing].map(([pageId, text]) => {
     const { meta, body } = parseFrontmatter(text);
     return { pageId, title: meta.title, sourceProjectIds: sourceProjectIds(meta),
       topic: meta.knowledgeTopic, decisionObject: meta.knowledgeDecisionObject,
-      summary: meta.summary, headings: body.split("\n").filter(line => /^#{1,3} /.test(line)) };
+      summary: meta.summary, headings: body.split("\n").filter(line => /^#{1,3} /.test(line)), bodyChars: body.length };
   });
 }
 

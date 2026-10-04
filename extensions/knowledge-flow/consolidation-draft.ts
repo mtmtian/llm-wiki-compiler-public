@@ -2,12 +2,14 @@
 import { sha256Text } from "../../src/connectors/hash.js";
 import { diagnoseClaims, formatClaimDiagnostics } from "./extract.js";
 import type { FlowClaim, FlowEvidence, FlowJob } from "./types.js";
+import { MAX_TOPIC_BODY_CHARS } from "./consolidation-plan.js";
 import type { PlannedPage } from "./consolidation-plan.js";
 import type { TopicRevision } from "./topic-revision-types.js";
 import { validateCitationChanges, validateRetirementReferences } from "./citation-retirement.js";
 import type { CitationRetirement } from "./citation-retirement.js";
 import { resolveQuote } from "./consolidation-quotes.js";
 import type { CorrectionEvidence } from "./consolidation-quotes.js";
+import { unexpandedPlaceholder } from "./kept-paragraphs.js";
 
 export interface TopicDraft {
   claims: FlowClaim[];
@@ -131,7 +133,7 @@ export function validatedDraft(draft: TopicDraft, job: FlowJob, pages: PlannedPa
 }
 
 function validateEdit(edit: TopicDraft["pages"][number], page: PlannedPage, claims: FlowClaim[], seen: Set<number>): void {
-  if (!edit.claimIndexes.length || edit.body.trimStart().startsWith("---") || edit.body.length > 12000) throw new Error("invalid topic body");
+  if (!edit.claimIndexes.length || edit.body.trimStart().startsWith("---") || edit.body.length > MAX_TOPIC_BODY_CHARS) throw new Error("invalid topic body");
   for (const index of edit.claimIndexes) {
     const claim = claims[index];
     if (seen.has(index) || !belongsToPage(claim, page)) throw new Error("claim topic ownership mismatch");
@@ -149,6 +151,11 @@ function belongsToPage(claim: FlowClaim | undefined, page: PlannedPage): boolean
 function validateCitationMarkers(edit: TopicDraft["pages"][number], original: string | null | undefined): void {
   for (const match of edit.body.matchAll(/\{\{claim:([^}]+)\}\}/g)) {
     if (!/^\d+$/.test(match[1]) || !edit.claimIndexes.includes(Number(match[1]))) throw new Error("unknown claim citation");
+  }
+  const placeholder = unexpandedPlaceholder(edit.body);
+  if (placeholder) {
+    throw new Error(`kept paragraph placeholder ${placeholder} was not expanded: write each keep placeholder alone on its own line, `
+      + "and only in the body of the existing page that lists it");
   }
   validateCitationChanges([original ?? ""], edit.body, edit.citationRetirements, { claimIndexes: edit.claimIndexes });
 }

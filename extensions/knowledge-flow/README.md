@@ -47,6 +47,13 @@ remain active. Original batch audits retain evidence beyond the 40,000-byte
 checkpoint window, without putting whole transcripts into the shared exchange. The window
 is measured like the job byte limit (UTF-8 JSON), so prior evidence alone never fills a job.
 
+Planning organizes pages by workstream: one page per product or repository and area of recurring
+work, such as its reporting rules, attribution data or release pipeline. Another decision object of
+the same workstream becomes a section of that page. A new page needs a workstream no page covers,
+or a sub-workstream once a page nears the editable body limit (`MAX_TOPIC_BODY_CHARS`, 12,000
+characters), and its reason names the closest existing page. The planning and review catalogs carry
+each page's `bodyChars` for that judgement, and review rejects a page that should have been a section.
+
 Each model stage has a durable input-bound result. Finalization advances the
 checkpoint once, after publication export succeeds. New messages arriving during
 processing belong to the next batch. Existing frozen jobs and legacy submissions
@@ -63,6 +70,7 @@ Each reviewed revision contains `pageId`, stable `topicId`, title/topic/object,
 the complete previous page `basisHash` (null for creation), Markdown `body`, and
 `claimIndexes`. Draft placeholders `{{claim:N}}` become exact quote citations.
 Before validation, `quote-repair.ts` restores a claim quote that lost markdown, quote marks or spacing to the exact original span of its evidence, and rebinds a verbatim quote cited under the wrong evidence ID to the only evidence that contains it; paraphrases and stitched fragments stay for the validator. A correction receives `claimAnchors`, the quote options of each previous claim's own evidence. Because corrections still tended to pin every claim to one quote option, the corrected draft is also checked deterministically: a claim whose text is nearly the same as exactly one previous claim keeps that claim's evidence (its exact quote, or the option of the same evidence that overlaps it most); rewritten or ambiguous claims keep the correction's choice. Every evidence item shown to the planner, editor and reviewer is marked `origin: current` (the turns being consolidated) or `origin: earlier` (session context). The editor chooses each claim's primary quote first and restates only what that quote says, citing earlier evidence as primary only when it states the claim; the marker is prompt-only and never appears in published evidence.
+The editor sees an existing page as `originalParagraphs` (runs of non-blank lines; a fenced code block stays whole), each with a placeholder such as `{{keep:P3}}`, and keeps a paragraph that needs no change by writing its placeholder alone on a line instead of retyping or condensing it. Before anything else, `kept-paragraphs.ts` puts the exact original paragraph back, citation markers included and set apart from adjacent text by a blank line, so repair, validation, review and published revisions never see a placeholder. A repeated placeholder, or one past the page's last paragraph, keeps nothing and is dropped; one inside other text or in a new page's body stays literal and fails validation as ordinary correction feedback.
 The editor receives each existing page's `citationChecklist` and must keep or retire every listed marker; a new page may not contain `^[...]` markers. Before validation, `citation-repair.ts` deterministically restores provenance the draft visibly kept: it unwraps `^[{{claim:N}}]`, swaps a renumbered or merged marker back to the dropped original markers of the same file it covers, and gives a line kept verbatim its original markers back. Retired markers are never restored, and anything it cannot prove still reaches the strict citation validator; a correction is told which markers were dropped, invented, or retired outside the page's basis.
 The independent reviewer can accept an explicit user change while preserving useful
 prior rationale, constraints and counterexamples. It holds unresolved conflicts and uncertain
