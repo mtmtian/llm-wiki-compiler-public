@@ -63,6 +63,7 @@ export function config(responses: Record<string, unknown>, onSystem?: (system: s
     exchange: { root: "/tmp/exchange", protocolVersion: 2, participants: ["test"] } };
 }
 
+/** Run consolidation with an isolated provider that returns the scenario's scripted stages. */
 export function runConsolidation(input: FlowJob, responses: Record<string, unknown>, pages: ReadonlyMap<string, string>,
   onSystem?: (system: string, toolName: string) => void): Promise<FlowResult> {
   return consolidateSession(input, config(responses, onSystem), pages);
