@@ -118,7 +118,7 @@ describe("knowledge-flow current task context contract", () => {
     const quoteId = _label === "task-only quote" ? "task-context-is-not-evidence" : buildCorrectionEvidence([item])[0].quoteOptions[0].quoteId;
     const harness = config(item, invalid, correctionDraft(quoteId));
     const result = await consolidateSession(job(item), harness.config, new Map([[PAGE, ORIGINAL]]));
-    expect(result.status).toBe("needs_review");
+    expect(result).toMatchObject({ status: "error", retryable: false });
     expect(result.contribution).toBeUndefined();
     const correction = harness.calls.find(call => call.tool === "knowledge_topic_edit" && call.request.correction);
     expect(correction?.request.correction?.reason).toMatch(/quote|decision|authority/i);

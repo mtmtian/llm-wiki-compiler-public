@@ -32,13 +32,13 @@ describe("independently reviewed unchanged topic drafts", () => {
 
   it.each(["reject", "needs_review"])("Given omitted knowledge detected by review (%s), Then never silently drops the batch", async decision => {
     const { result, calls } = await consolidate(unchanged(), { ...accepted(), checkedClaimIndexes: [], decision, reason: "Required knowledge was omitted." });
-    expect(result).toMatchObject({ status: "needs_review", error: "Required knowledge was omitted." });
+    expect(result).toMatchObject({ status: decision === "needs_review" ? "needs_review" : "error", error: "Required knowledge was omitted." });
     expect(calls).toContain("knowledge_topic_review");
   });
 
-  it("Given acceptance with missing page coverage, Then holds the unchanged draft", async () => {
+  it("Given acceptance with missing page coverage, Then fails the unchanged draft without human review", async () => {
     const { result } = await consolidate(unchanged(), { ...accepted(), checkedClaimIndexes: [], checkedPageIds: [] });
-    expect(result).toMatchObject({ status: "needs_review", error: expect.stringContaining("page coverage mismatch") });
+    expect(result).toMatchObject({ status: "error", retryable: false, error: expect.stringContaining("page coverage mismatch") });
   });
 
   it.each(["body", "retirement", "indexes", "duplicate", "missing"])("Given an invalid empty-claim draft (%s), Then cannot use the no-change exit", async defect => {
@@ -49,14 +49,14 @@ describe("independently reviewed unchanged topic drafts", () => {
     if (defect === "duplicate") changed.pages.push(changed.pages[0]);
     if (defect === "missing") changed.pages = [];
     const { result, calls } = await consolidate(changed);
-    expect(result.status).toBe("needs_review");
+    expect(result).toMatchObject({ status: "error", retryable: false });
     expect(calls).not.toContain("knowledge_topic_review");
   });
 
   it("Given a planned label change without claims, Then cannot silently discard that change", async () => {
     const changedPlan = plan(); changedPlan.pages[0].title = "Changed title";
     const { result, calls } = await consolidate(unchanged(), undefined, changedPlan);
-    expect(result.status).toBe("needs_review");
+    expect(result).toMatchObject({ status: "error", retryable: false });
     expect(calls).not.toContain("knowledge_topic_review");
   });
 
@@ -65,7 +65,7 @@ describe("independently reviewed unchanged topic drafts", () => {
       knowledge_topic_edit: { ...unchanged(), pages: [] } });
     const input = job(); input.allowedPageIds = [];
     const result = await consolidateSession(input, runtime, new Map());
-    expect(result.status).toBe("needs_review");
+    expect(result).toMatchObject({ status: "error", retryable: false });
     expect(result.contribution).toBeUndefined();
   });
 });

@@ -12,8 +12,10 @@ import os
 import re
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
+from admission_usage import intake_lock, runnable_capacity_reason
 from common import (config_from, digest, inside, is_excluded_artifact_path, load_json,
                     page_ids, read_operational_context, safe_text, save_json)
 from hook_context import prepare_context
@@ -25,11 +27,12 @@ from read_routing import resolve_read
 from routing import git_identity, resolve, resolve_repo_identity
 from capture import capture_evidence_result, has_substantive_evidence
 from host_automation import capture_automation_reason, job_automation_reason, prompt_automation_reason
-from capture_retry import pending_path, record_capture_pending
+from capture_retry import pending_path, persist_capacity_wait, record_capture_pending
 from queue_worker import process_queue as drain_queue
-from queue_worker import MAX_JOB_BYTES
+from queue_batch import MAX_JOB_BYTES
 from turn_routing import recover_turn_route
 from queue_wire import EventTooLarge, checked_request, job_bytes
+from review_capacity import review_queue_full
 from session_schedule import enabled as session_enabled
 from session_state import context_for_job, persist_queued_job
 
@@ -276,14 +279,6 @@ def stop_event(event, config):
         save_json(session, {**previous, "projectId": record["projectId"],
                             "repoIdentity": record["repoIdentity"], "seen": previous.get("seen", {})})
     job = prepare_job(event, record, config, captured)
-    pending = list((state / "queue").glob("*.json"))
-    if not job.get("intakeFilterReason") and len(pending) >= config.get("maxQueuedJobs", 30):
-        if job.get("captureStatus") == "unavailable":
-            record_capture_pending(config, identifier, event, record, job,
-                                   job.get("captureReason", "named-transcript-unavailable"))
-        else:
-            record_capture_error(state, identifier, "IntakeQueueFull")
-        return {}
     result = enqueue_job(job, queued, config, pending_source=(event, record))
     if queued.exists() or (state / "completed" / queued.name).exists():
         pending_path(config, identifier).unlink(missing_ok=True)
@@ -319,6 +314,13 @@ def _queue_session_job(job, queued, config):
     return persist_queued_job(config, job, queued)
 
 
+def _capacity_reason(config, state, job):
+    """Check the project review gate before the shared runtime queue limit."""
+    if review_queue_full(config, job):
+        return "review-queue-full"
+    return runnable_capacity_reason(state, config.get("maxQueuedJobs", 30))
+
+
 def _set_legacy_delay(job, config):
     """Keep the old notBefore marker for compatibility with pre-session tooling."""
     policy = config.get("eventDriven", {})
@@ -328,8 +330,8 @@ def _set_legacy_delay(job, config):
                             + datetime.timedelta(seconds=delay)).isoformat()
 
 
-def enqueue_job(job, queued, config, pending_source=None):
-    """Persist substantive evidence without running a model in event-driven hooks."""
+def _prequeue_outcome(job, queued, config, pending_source):
+    """Finish terminal intake filters before admission consumes runnable capacity."""
     state = Path(config["stateDir"])
     identifier = queued.stem
     reason = job.get("intakeFilterReason") or (job_automation_reason(job) if job.get("captureStatus") != "unavailable" else "")
@@ -357,11 +359,31 @@ def enqueue_job(job, queued, config, pending_source=None):
         clear_capture_error(state, identifier)
         save_json(state / "completed" / (identifier + ".json"), {"status": "empty", "reason": "no-durable-evidence"})
         return {}
-    if not queued.exists():
+    return None
+
+
+def enqueue_job(job, queued, config, pending_source=None, intake_locked=False):
+    """Persist substantive evidence without running a model in event-driven hooks."""
+    state = Path(config["stateDir"])
+    identifier = queued.stem
+    terminal = _prequeue_outcome(job, queued, config, pending_source)
+    if terminal is not None:
+        return terminal
+    lock = nullcontext() if intake_locked else intake_lock(config)
+    with lock:
+        if queued.exists() or any((state / folder / queued.name).exists() for folder in ("completed", "failed")):
+            return {}
+        reason = _capacity_reason(config, state, job)
+        if reason:
+            outcome = persist_capacity_wait(config, job, reason)
+            if outcome.get("status") != "error":
+                clear_capture_error(state, identifier)
+            return outcome
         _set_legacy_delay(job, config)
         _queue_session_job(job, queued, config)
     clear_capture_error(state, identifier)
-    if not config.get("exchange") and not config.get("eventDriven", {}).get("enabled"):
+    if (not intake_locked and not config.get("exchange")
+            and not config.get("eventDriven", {}).get("enabled")):
         process_queue(config, limit=1)
     return {}
 

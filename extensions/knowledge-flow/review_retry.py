@@ -18,9 +18,10 @@ import re
 from pathlib import Path
 
 from common import digest, load_json, page_ids, save_json
+from admission_usage import can_admit_runnable, intake_lock
 from queue_schedule import clock_value, iso
 from queue_wire import checked_request, job_bytes
-from review_capacity import QUEUE_FULL_ERROR, review_queue_full
+from review_capacity import QUEUE_FULL_ERROR, is_capacity_refusal, review_queue_full
 
 
 def _identifier(value):
@@ -40,10 +41,12 @@ def _read_anchor(state, identifier, batch):
     review_path = _anchor_path(state, identifier, "review")
     if review_path.exists():
         return review_path.read_text(), "review"
-    text = _anchor_path(state, identifier, "audit").read_text()
+    audit_path = _anchor_path(state, identifier, "audit")
+    if not audit_path.exists():
+        raise ValueError("retry requires a completed held session with original evidence")
+    text = audit_path.read_text()
     audit = json.loads(text)
-    if (audit.get("status") != "needs_review" or audit.get("error") != QUEUE_FULL_ERROR
-            or batch.get("result", {}).get("error") != QUEUE_FULL_ERROR):
+    if not is_capacity_refusal(audit) or not is_capacity_refusal(batch.get("result")):
         raise ValueError("retry requires a completed held session with original evidence")
     return text, "audit"
 
@@ -94,9 +97,12 @@ def _stage_retry(config, state, identifier, source, created, dry_run):
     """Freeze a new request before enqueue; a repeated request reuses it verbatim."""
     job = _retry_job(config, source, identifier, created)
     base_id, attempt = job["id"], 1
-    while (state / "failed" / (job["id"] + ".json")).exists():
+    completed = state / "completed" / (job["id"] + ".json")
+    while ((state / "failed" / (job["id"] + ".json")).exists()
+           or completed.exists() and is_capacity_refusal(load_json(completed, {}))):
         attempt += 1
         job["id"] = base_id + "-" + str(attempt)
+        completed = state / "completed" / (job["id"] + ".json")
     retry_id = job["id"]
     manifest_path = state / "review-retries" / (retry_id + ".json")
     prior = load_json(manifest_path, None)
@@ -105,16 +111,26 @@ def _stage_retry(config, state, identifier, source, created, dry_run):
     if job_bytes(job) > int(config.get("maxJobBytes", 120000)):
         raise ValueError("review retry exceeds job byte limit")
     checked_request(config, "process", {"job": job})
+    pending_path = state / "capture-pending" / (retry_id + ".json")
+    pending = load_json(pending_path, None) if pending_path.exists() else None
     existing = next((folder for folder in ("queue", "completed", "failed")
                      if (state / folder / (retry_id + ".json")).exists()), None)
-    if not existing and len(list((state / "queue").glob("*.json"))) >= int(config.get("maxQueuedJobs", 30)):
-        raise ValueError("queue capacity reached")
+    if not existing and pending_path.exists():
+        existing = "deferred" if isinstance(pending, dict) and pending.get("kind") == "capacity" else "pending"
     if not existing and source["anchor"] == "audit" and review_queue_full(config, job):
         raise ValueError(QUEUE_FULL_ERROR + "; resolve held reviews first")
+    maximum = max(0, int(config.get("maxQueuedJobs", 30)))
+    if not existing and not can_admit_runnable(state, maximum):
+        raise ValueError("queue capacity reached")
     if not dry_run and not existing:
-        save_json(manifest_path, prior or {"version": 1, "originalJobId": identifier,
-                  "createdAt": created, "job": job, **source})
-        save_json(state / "queue" / (retry_id + ".json"), job)
+        with intake_lock(config):
+            if not can_admit_runnable(state, maximum):
+                raise ValueError("queue capacity reached")
+            if source["anchor"] == "audit" and review_queue_full(config, job):
+                raise ValueError(QUEUE_FULL_ERROR + "; resolve held reviews first")
+            save_json(manifest_path, prior or {"version": 1, "originalJobId": identifier,
+                      "createdAt": created, "job": job, **source})
+            save_json(state / "queue" / (retry_id + ".json"), job)
     return {"status": existing or ("ready" if dry_run else "queued"), "reviewJobId": identifier,
             "retryJobId": retry_id, "projectId": job["projectId"], "jobBytes": job_bytes(job)}
 

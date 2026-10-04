@@ -126,16 +126,16 @@ describe("partial page publication: end to end", () => {
     expect(result.claimReviews!.map(item => item.stage)).toEqual(["initial", "correction", "pruned"]);
   });
 
-  it("Given the reduced draft is rejected too, Then the batch stays held with both reasons", async () => {
+  it("Given the reduced draft is rejected too, Then the batch fails with both reasons", async () => {
     const { result } = await consolidateWithRejectedClaim({ ...accepted(), decision: "reject", reason: "页面叙述仍不完整" });
-    expect(result.status).toBe("needs_review");
+    expect(result).toMatchObject({ status: "error", retryable: false });
     expect(result.error).toContain("第 2 条证据不支持");
     expect(result.error).toContain("只保留已接受的 claim 后仍未通过审核：页面叙述仍不完整");
   });
 
-  it("Given the fresh review fails, Then the batch is held as before instead of erroring", async () => {
+  it("Given the fresh review fails, Then the batch records the invalid review as a technical failure", async () => {
     const { result } = await consolidateWithRejectedClaim({ ...accepted(), checkedClaimIndexes: [0, 1] });
-    expect(result.status).toBe("needs_review");
+    expect(result).toMatchObject({ status: "error", retryable: false });
     expect(result.error).toMatch(/^第 2 条证据不支持；只保留已接受的 claim 后审核失败：knowledge_topic_review: /);
     expect(result.claimReviews!.map(item => item.stage)).toEqual(["initial", "correction"]);
   });

@@ -15,9 +15,12 @@ import re
 from pathlib import Path
 
 from common import load_json, save_json
+from admission_usage import (can_admit_runnable, can_admit_wait, intake_lock,
+                             runnable_capacity_reason)
 from hooks import enqueue_job, now, prepare_session_job
 from queue_wire import job_bytes
-from queue_worker import MAX_JOB_BYTES
+from queue_batch import MAX_JOB_BYTES
+from review_capacity import review_queue_full
 
 # Worker-owned scheduling, scope and diagnostic fields; intake recomputes what it needs.
 STALE_FIELDS = ("at", "type", "status", "error", "jobId", "jobBytes", "maxJobBytes", "attempts",
@@ -47,7 +50,8 @@ def _new_job(state, source):
     job = {key: value for key, value in copy.deepcopy(source).items() if key not in STALE_FIELDS}
     base = source["id"] + "-requeue"
     job["id"], attempt = base, 1
-    while any((state / folder / (job["id"] + ".json")).exists() for folder in ("queue", "failed", "completed")):
+    while any((state / folder / (job["id"] + ".json")).exists()
+              for folder in ("queue", "failed", "completed", "capture-pending")):
         attempt += 1
         job["id"] = f"{base}-{attempt}"
     job["requeueOf"] = source["id"]
@@ -60,6 +64,13 @@ def _outcome(state, job):
         return "queued"
     if (state / "completed" / (job["id"] + ".json")).exists():
         return "empty"
+    pending = load_json(state / "capture-pending" / (job["id"] + ".json"), None)
+    if (isinstance(pending, dict) and pending.get("kind") == "capacity"
+            and isinstance(pending.get("job"), dict) and pending["job"].get("id") == job["id"]):
+        return "deferred"
+    failed = load_json(state / "failed" / (job["id"] + ".json"), None)
+    if isinstance(failed, dict) and failed.get("status") == "capacity-admission-failed":
+        return "capacity-full"
     raise ValueError("intake neither queued nor completed the requeued job")
 
 
@@ -84,12 +95,26 @@ def _stage(config, state, identifier, dry_run):
               "jobBytes": size, "maxJobBytes": limit}
     if size > limit:
         return {**report, "status": "too-large"}
-    if len(list((state / "queue").glob("*.json"))) >= int(config.get("maxQueuedJobs", 30)):
+    maximum = max(0, int(config.get("maxQueuedJobs", 30)))
+    needs_wait = (review_queue_full(config, preview)
+                  or runnable_capacity_reason(state, maximum) is not None)
+    if needs_wait and not can_admit_wait(state, maximum):
+        return {**report, "status": "capacity-full"}
+    if not needs_wait and not can_admit_runnable(state, maximum):
         return {**report, "status": "queue-full"}
     if dry_run:
         return {**report, "status": "ready"}
-    enqueue_job(job, queued, config)
-    outcome = _outcome(state, job)
+    with intake_lock(config):
+        needs_wait = (review_queue_full(config, preview)
+                      or runnable_capacity_reason(state, maximum) is not None)
+        if needs_wait and not can_admit_wait(state, maximum):
+            return {**report, "status": "capacity-full"}
+        if not needs_wait and not can_admit_runnable(state, maximum):
+            return {**report, "status": "queue-full"}
+        enqueue_job(job, queued, config, intake_locked=True)
+        outcome = _outcome(state, job)
+    if outcome == "capacity-full":
+        return {**report, "status": outcome}
     _archive(state, identifier, source, job, outcome)
     return {**report, "status": outcome}
 

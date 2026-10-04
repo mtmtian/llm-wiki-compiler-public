@@ -238,23 +238,25 @@ class FlowTests(unittest.TestCase):
         self.assertFalse((self.root / "queue" / (identifier + ".json")).exists())
         self.assertEqual(load_json(pending_path), frozen)
 
-    def test_queue_full_is_recoverable_capture_error_and_duplicate_is_quiet(self):
+    def test_capacity_wait_admission_failure_keeps_full_input_and_duplicate_is_quiet(self):
         self.config["maxQueuedJobs"] = 0
         hooks.handle(self.event, self.config)
         stop = {**self.event, "hook_event_name": "Stop", "last_assistant_message": "分析结果有明确变化"}
         hooks.handle(stop, self.config)
         identifier = hooks.event_path(self.config, stop).stem
         error_path = self.root / "capture-errors" / (identifier + ".json")
-        self.assertEqual(load_json(error_path)["type"], "IntakeQueueFull")
+        self.assertEqual(load_json(error_path)["type"], "CapacityAdmissionError")
+        self.assertEqual(load_json(self.root / "failed" / (identifier + ".json"))["status"],
+                         "capacity-admission-failed")
         self.config["maxQueuedJobs"] = 1
         stop["conversation_evidence"] = [{"kind": "user", "text": self.event["prompt"]}]
         hooks.handle(stop, self.config)
-        self.assertTrue((self.root / "queue" / (identifier + ".json")).exists())
-        self.assertFalse(error_path.exists())
-        self.assertFalse((self.root / "last-error.json").exists())
+        self.assertFalse((self.root / "queue" / (identifier + ".json")).exists())
+        self.assertTrue(error_path.exists())
+        self.assertEqual(load_json(self.root / "last-error.json")["type"], "CapacityAdmissionError")
         self.config["maxQueuedJobs"] = 0
         hooks.handle(stop, self.config)
-        self.assertFalse(error_path.exists())
+        self.assertTrue(error_path.exists())
 
     def test_github_lookalike_is_not_owned(self):
         self.assertIsNone(routing.remote_identity("https://github.com.attacker.test/work/app"))

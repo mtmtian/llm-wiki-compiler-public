@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import datetime as dt
 import fcntl
+import json
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from capture import capture_evidence_result
-from common import load_json, safe_text, save_json
+from common import digest, load_json, safe_text, save_json
+from admission_usage import (admission_usage, can_admit_runnable, can_admit_wait,
+                             can_restore_pending,
+                             intake_lock)
+from review_capacity import review_queue_full
+from session_state import discard_pending, persist_queued_job, reconcile_queue_pending
 
 UTC = dt.timezone.utc
 DEFAULT_ATTEMPTS = 6
@@ -90,6 +97,72 @@ def _worker_lock(config: dict[str, Any]):
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
+def _capacity_hash(job: dict[str, Any]) -> str:
+    """Bind capacity waits to the exact serialized source snapshot."""
+    canonical = json.dumps(job, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return digest(canonical)
+
+
+def capacity_backoff_seconds(config: dict[str, Any]) -> int:
+    """Reuse the configured capture retry ceiling for capacity-only wake delays."""
+    return _policy(config)["maxBackoffSeconds"]
+
+
+def _admission_failure(config: dict[str, Any], job: dict[str, Any], reason: str,
+                       source_path: Path | None = None) -> dict[str, Any]:
+    """Keep the full rejected snapshot in failed/ when no bounded wait slot remains."""
+    state = Path(config["stateDir"])
+    failure = {**job, "status": "capacity-admission-failed",
+               "error": f"capacity wait admission failed: {reason}", "failureClass": "admission"}
+    failed = state / "failed" / (str(job["id"]) + ".json")
+    save_json(failed, failure)
+    if source_path is not None:
+        source_path.unlink(missing_ok=True)
+        discard_pending(config, job)
+    current = _clock()
+    diagnostic = {"at": _iso(current), "type": "CapacityAdmissionError", "status": "error",
+                  "jobId": job.get("id"), "reason": reason}
+    save_json(state / "last-error.json", diagnostic)
+    save_json(state / "capture-errors" / (str(job["id"]) + ".json"), diagnostic)
+    pending_path(config, str(job["id"])).unlink(missing_ok=True)
+    return {"status": "error", "reason": "capacity-admission-failed", "jobId": job.get("id")}
+
+
+def persist_capacity_wait(config: dict[str, Any], job: dict[str, Any], reason: str,
+                          now: dt.datetime | None = None,
+                          source_path: Path | None = None) -> dict[str, Any]:
+    """Persist or recover one complete capacity-wait snapshot while intake is locked."""
+    current = _clock(now)
+    state = Path(config["stateDir"])
+    identifier = str(job.get("id", ""))
+    path = pending_path(config, identifier)
+    existing = load_json(path, None) if path.exists() else None
+    job_hash = _capacity_hash(job)
+    if isinstance(existing, dict) and existing.get("kind") == "capacity":
+        if existing.get("jobHash") != job_hash or existing.get("job") != job:
+            return {"status": "error", "reason": "capacity-snapshot-conflict", "jobId": identifier}
+        if source_path is not None:
+            source_path.unlink(missing_ok=True)
+            discard_pending(config, job)
+        return {"status": "deferred", "reason": existing.get("reason", reason), "jobId": identifier}
+    if source_path is None and not can_admit_wait(state, max(0, int(config.get("maxQueuedJobs", 30)))):
+        usage = admission_usage(state)
+        reason = "capacity-wait-full" if usage["waiting"] >= max(0, int(
+            config.get("maxQueuedJobs", 30))) else "admission-envelope-full"
+        return _admission_failure(config, job, reason)
+    policy = _policy(config)
+    record = {"version": 1, "kind": "capacity", "id": identifier, "status": "pending",
+              "createdAt": job.get("createdAt"), "updatedAt": _iso(current),
+              "nextAttemptAt": _iso(current + dt.timedelta(seconds=policy["maxBackoffSeconds"])),
+              "reason": reason, "jobHash": job_hash, "job": job}
+    record["queueFile"] = source_path.name if source_path is not None else identifier + ".json"
+    save_json(path, record)
+    if source_path is not None:
+        source_path.unlink(missing_ok=True)
+        discard_pending(config, job)
+    return {"status": "deferred", "reason": reason, "jobId": identifier}
+
+
 def record_capture_pending(config: dict[str, Any], identifier: str, event: dict[str, Any],
                            record: dict[str, Any], job: dict[str, Any], reason: str,
                            now: dt.datetime | None = None) -> dict[str, Any]:
@@ -130,6 +203,16 @@ def _terminal(config: dict[str, Any], value: dict[str, Any], reason: str, when: 
     pending_path(config, value["id"]).unlink(missing_ok=True)
 
 
+def _reschedule_capacity(config: dict[str, Any], value: dict[str, Any], reason: str,
+                         when: dt.datetime) -> str:
+    """Delay a capacity wait without spending capture attempts or its transcript TTL."""
+    delay = _policy(config)["maxBackoffSeconds"]
+    value.update({"reason": reason, "updatedAt": _iso(when),
+                  "nextAttemptAt": _iso(when + dt.timedelta(seconds=delay))})
+    save_json(pending_path(config, value["id"]), value)
+    return "pending"
+
+
 def _reschedule(config: dict[str, Any], value: dict[str, Any], reason: str, when: dt.datetime) -> str:
     """Increase the attempt counter and retain the source until deadline."""
     policy = _policy(config)
@@ -149,23 +232,90 @@ def _reschedule(config: dict[str, Any], value: dict[str, Any], reason: str, when
 def _pending_records(config: dict[str, Any]):
     """Load only well-shaped pending records; corrupt state remains untouched."""
     directory = Path(config["stateDir"]) / "capture-pending"
+    records = []
     for path in sorted(directory.glob("*.json")):
         try:
             value = load_json(path)
         except (OSError, ValueError, TypeError):
             continue
-        if isinstance(value, dict) and value.get("id") == path.stem and value.get("event") and value.get("record"):
-            yield path, value
+        if not isinstance(value, dict) or value.get("id") != path.stem:
+            continue
+        if value.get("kind") == "capacity":
+            job = value.get("job")
+            if (not isinstance(job, dict) or job.get("id") != path.stem
+                    or value.get("jobHash") != _capacity_hash(job)
+                    or not isinstance(job.get("evidence"), list)):
+                continue
+        elif not value.get("event") or not value.get("record"):
+            continue
+        created = _parse(value.get("createdAt"))
+        records.append(((created is None, created or dt.datetime.max.replace(tzinfo=UTC), path.name),
+                        path, value))
+    for _, path, value in sorted(records, key=lambda row: row[0]):
+        yield path, value
 
 
 def _queue_full(config: dict[str, Any]) -> bool:
-    """Respect the normal intake queue cap without creating a false error."""
-    state = Path(config["stateDir"])
-    return len(list((state / "queue").glob("*.json"))) >= int(config.get("maxQueuedJobs", 30))
+    """Respect runnable and total admission bounds before a new capture retry."""
+    return not can_admit_runnable(Path(config["stateDir"]),
+                                  max(0, int(config.get("maxQueuedJobs", 30))))
+
+
+def _same_frozen_job(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    """Compare source content while ignoring queue-owned scheduling markers."""
+    mutable = {"queueFile", "sessionSchedule"}
+    left = {key: value for key, value in first.items() if key not in mutable}
+    right = {key: value for key, value in second.items() if key not in mutable}
+    return left == right
+
+
+def _capacity_block_reason(config: dict[str, Any], job: dict[str, Any]) -> str | None:
+    """Check project capacity before shared queue capacity, matching admission order."""
+    if review_queue_full(config, job):
+        return "review-queue-full"
+    return None if can_restore_pending(Path(config["stateDir"]), config.get("maxQueuedJobs", 30)) else "runtime-queue-full"
+
+
+def _retry_capacity(config: dict[str, Any], value: dict[str, Any], when: dt.datetime) -> str:
+    """Restore a complete capacity snapshot without consulting its original transcript."""
+    state, identifier, job = Path(config["stateDir"]), value["id"], value["job"]
+    queue_name = value.get("queueFile") or (identifier + ".json")
+    queued = state / "queue" / queue_name
+    terminal = any((state / folder / (identifier + ".json")).exists()
+                   for folder in ("completed", "failed"))
+    if terminal:
+        pending_path(config, identifier).unlink(missing_ok=True)
+        return "terminal"
+    with intake_lock(config):
+        if queued.exists():
+            try:
+                existing = load_json(queued)
+            except (OSError, ValueError, TypeError):
+                return _reschedule_capacity(config, value, "queued-source-invalid", when)
+            if not isinstance(existing, dict) or not _same_frozen_job(job, existing):
+                return _reschedule_capacity(config, value, "queued-source-conflict", when)
+            reconcile_queue_pending(config)
+            pending_path(config, identifier).unlink(missing_ok=True)
+            return "recovered"
+        reason = _capacity_block_reason(config, job)
+        if reason:
+            return _reschedule_capacity(config, value, reason, when)
+        source = dict(job)
+        try:
+            persist_queued_job(config, source, queued, queued_at=when)
+        except (OSError, ValueError, TypeError):
+            return _reschedule_capacity(config, value, "queue-persist-interrupted", when)
+        if not queued.is_file():
+            return _reschedule_capacity(config, value, "queue-persist-missing", when)
+        reconcile_queue_pending(config)
+        pending_path(config, identifier).unlink(missing_ok=True)
+        return "recovered"
 
 
 def _retry_one(config: dict[str, Any], value: dict[str, Any], when: dt.datetime) -> str:
     """Attempt one pending source and return its bounded outcome."""
+    if value.get("kind") == "capacity":
+        return _retry_capacity(config, value, when)
     state = Path(config["stateDir"])
     identifier = value["id"]
     if any((state / folder / (identifier + ".json")).exists() for folder in ("queue", "completed", "failed")):
@@ -182,6 +332,9 @@ def _retry_one(config: dict[str, Any], value: dict[str, Any], when: dt.datetime)
     job = prepare_job(event, record, config, captured, artifact_snapshot=value.get("artifactEvidence", []))
     queued = Path(config["stateDir"]) / "queue" / (event_path(config, event).stem + ".json")
     enqueue_job(job, queued, config)
+    current = load_json(pending_path(config, value["id"]), {})
+    if isinstance(current, dict) and current.get("kind") == "capacity":
+        return "pending"
     completed = Path(config["stateDir"]) / "completed" / queued.name
     failed = Path(config["stateDir"]) / "failed" / queued.name
     if queued.exists() or completed.exists() or failed.exists():
@@ -226,4 +379,5 @@ def capture_retry_at(config: dict[str, Any]) -> str | None:
     return _iso(min(values)) if values else None
 
 
-__all__ = ["capture_retry_at", "pending_path", "process_capture_retries", "record_capture_pending"]
+__all__ = ["capture_retry_at", "pending_path", "persist_capacity_wait",
+           "capacity_backoff_seconds", "process_capture_retries", "record_capture_pending"]

@@ -8,7 +8,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { sha256Text } from "../../src/connectors/hash.js";
 import { CodexAgentProvider } from "../../src/providers/codex-agent.js";
@@ -25,6 +25,8 @@ import { MAX_PROPOSALS } from "./types.js";
 import { assertTopicContextBudget, MAX_TOPIC_CONTEXT_CHARS } from "./consolidation-plan.js";
 import { quoteContribution } from "./contribution.js";
 import { consolidateSession } from "./consolidate.js";
+import { ConsolidationOutputError } from "./consolidation-model.js";
+import { pendingReviewCount } from "./review-capacity.js";
 import type { FlowClaim, FlowConfig, FlowDependencies, FlowJob, FlowResult, FlowReviewDecision } from "./types.js";
 
 const DEFAULT_DEPENDENCIES: FlowDependencies = { extract: extractClaims, review: reviewClaims };
@@ -52,8 +54,8 @@ export async function processJob(
   } catch (error) {
     return failure(error instanceof Error ? error.message : "could not read scoped wiki pages");
   }
-  const queue = await pendingCount(config.stateDir, job.projectId, job.reviewRetryOf);
-  if (queue >= config.maxPendingPerProject) return await record(job, config, { status: "needs_review", publishedPageIds: [], reviewCount: 1, error: "review queue is full" });
+  const queue = await pendingReviewCount(config.stateDir, job.projectId, job.reviewRetryOf);
+  if (queue >= config.maxPendingPerProject) return { status: "deferred", publishedPageIds: [], reviewCount: 0, error: "review queue is full" };
   if (job.evidence.length === 0) return empty(config, job, "no evidence supplied");
   if (dependencies === DEFAULT_DEPENDENCIES && !job.submittedClaims && job.sessionContext
     && config.exchange?.protocolVersion === 2 && config.sessionConsolidation?.enabled !== false) {
@@ -69,9 +71,11 @@ async function runSession(job: FlowJob, config: FlowConfig, existing: ReadonlyMa
     if (result.status === "needs_review") {
       result.reviewFile = await writeReview(config.stateDir, job, [], [{ decision: "needs_review", reason: result.error }]);
     }
-    return await record(job, config, result);
+    return result.status === "error" && result.retryable !== false ? result : await record(job, config, result);
   } catch (error) {
-    return failure(error instanceof Error ? error.message : "session consolidation failed");
+    const result = failure(error instanceof Error ? error.message : "session consolidation failed",
+      error instanceof ConsolidationOutputError ? false : undefined);
+    return result.retryable === false ? record(job, config, result) : result;
   }
 }
 
@@ -254,16 +258,6 @@ async function readAllowedPages(job: FlowJob, wikiRoot: string): Promise<Readonl
   return pages;
 }
 
-async function pendingCount(stateDir: string, projectId: string, replacedId?: string): Promise<number> {
-  const dir = path.join(stateDir, "review");
-  let names: string[];
-  try { names = await readdir(dir); } catch { return 0; }
-  const records = await Promise.all(names.filter((name) => name.endsWith(".json") && name !== `${replacedId}.json`).map(async (name) => {
-    try { return JSON.parse(await readFile(path.join(dir, name), "utf8")) as { projectId?: string }; } catch { return null; }
-  }));
-  return records.filter((item) => item?.projectId === projectId).length;
-}
-
 async function writeReview(stateDir: string, job: FlowJob, claims: FlowClaim[], decisions: unknown[]): Promise<string> {
   const file = path.join(stateDir, "review", `${safeId(job.id)}.json`);
   await mkdir(path.dirname(file), { recursive: true });
@@ -278,6 +272,7 @@ async function writeReview(stateDir: string, job: FlowJob, claims: FlowClaim[], 
   const sessionReview = job.sessionContext ? { sessionContext: job.sessionContext, inputEvidence: job.evidence,
     modelStages: path.join(stateDir, "consolidation", sha256Text(job.id)) } : undefined;
   await atomicWrite(file, JSON.stringify({ jobId: job.id, projectId: job.projectId, createdAt: job.createdAt,
+    ...(job.reviewRetryOf ? { reviewRetryOf: job.reviewRetryOf } : {}),
     claims: allClaims, evidence: allEvidence, decisions: allDecisions, sessionReview }, null, 2), { confineRoot: stateDir });
   return file;
 }
@@ -309,8 +304,7 @@ async function readAudit(stateDir: string, jobId: string): Promise<FlowResult | 
       ...(Array.isArray(value.candidateIds) ? { candidateIds: value.candidateIds } : {}),
       ...(typeof value.reviewFile === "string" ? { reviewFile: value.reviewFile } : {}),
       ...(typeof value.error === "string" ? { error: value.error } : {}),
-      ...contributionField(value),
-      ...sessionMemoryField(value),
+      ...recoverableFields(value),
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -318,13 +312,13 @@ async function readAudit(stateDir: string, jobId: string): Promise<FlowResult | 
   }
 }
 
-function sessionMemoryField(value: FlowResult): Pick<FlowResult, "sessionMemory"> {
-  return value.sessionMemory ? { sessionMemory: value.sessionMemory } : {};
-}
-
-/** Keep a submitted contribution recoverable until its immutable export succeeds. */
-function contributionField(value: FlowResult): Pick<FlowResult, "contribution"> {
-  return value.contribution ? { contribution: value.contribution } : {};
+/** Replay the same terminal classification and accepted claims until durable host finalization succeeds. */
+function recoverableFields(value: FlowResult): Partial<FlowResult> {
+  return { ...(typeof value.retryable === "boolean" ? { retryable: value.retryable } : {}),
+    ...(Array.isArray(value.claimReviews) ? { claimReviews: value.claimReviews } : {}),
+    ...(value.ledgerContribution ? { ledgerContribution: value.ledgerContribution } : {}),
+    ...(value.contribution ? { contribution: value.contribution } : {}),
+    ...(value.sessionMemory ? { sessionMemory: value.sessionMemory } : {}) };
 }
 
 async function record(job: FlowJob, config: FlowConfig, result: FlowResult): Promise<FlowResult> {
@@ -338,8 +332,8 @@ async function empty(config: FlowConfig, job: FlowJob, _reason: string): Promise
   return record(job, config, { status: "empty", publishedPageIds: [], reviewCount: 0 });
 }
 
-function failure(error: string): FlowResult {
-  return { status: "error", publishedPageIds: [], reviewCount: 0, error };
+function failure(error: string, retryable?: boolean): FlowResult {
+  return { status: "error", publishedPageIds: [], reviewCount: 0, error, ...(retryable === false ? { retryable } : {}) };
 }
 
 function safeId(id: string): string {

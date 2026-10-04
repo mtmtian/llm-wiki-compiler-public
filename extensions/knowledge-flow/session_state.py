@@ -186,7 +186,8 @@ def _add_pending(state: dict[str, Any], job: dict[str, Any], queued_at: Any = No
     _refresh_window(state)
 
 
-def persist_queued_job(config: dict[str, Any], job: dict[str, Any], queued: Path) -> dict[str, Any]:
+def persist_queued_job(config: dict[str, Any], job: dict[str, Any], queued: Path,
+                       queued_at: Any = None) -> dict[str, Any]:
     """Write the queue source first, then its checkpoint under one session lock."""
     project, session = job.get("projectId"), job.get("sessionId")
     if not project or not session:
@@ -194,7 +195,7 @@ def persist_queued_job(config: dict[str, Any], job: dict[str, Any], queued: Path
         return {}
     with _session_lock(config, str(project), str(session), exclusive=True):
         state = load_session(config, str(project), str(session))
-        stamp = _timestamp()
+        stamp = _timestamp(queued_at)
         job["queueFile"] = queued.name
         first = state.get("firstQueuedAt") or stamp
         job["sessionSchedule"] = {"version": 1, "firstQueuedAt": first,
@@ -276,7 +277,8 @@ def _active_audit(root: Path, identifier: str, queue_file: Any) -> bool:
         except (OSError, ValueError, TypeError):
             continue
         if not isinstance(audit, dict) or audit.get("status") not in (
-                "claimed", "retry", "sync-retry", "result-ready", "finalize-retry"):
+                "claimed", "retry", "sync-retry", "result-ready", "finalize-retry",
+                "capacity-deferred", "failure-finalize"):
             continue
         if queue_file in audit.get("queueFiles", []) or identifier in audit.get("sourceJobIds", []):
             return True

@@ -59,7 +59,7 @@ class QueueProgressTests(unittest.TestCase):
         def receipt(_config, job, _result):
             if job["sessionId"] == "one":
                 raise OSError("receipt temporarily unavailable")
-        with patch("queue_worker.write_receipt", side_effect=receipt):
+        with patch("queue_finalization.write_receipt", side_effect=receipt):
             result = process_queue(self.config, lambda *_: {"status": "empty"}, clock=lambda: self.now)
         self.assertEqual(result["processed"], 1)
         self.assertEqual(sorted(p.stem for p in (self.state / "queue").glob("*.json")), ["a"])
