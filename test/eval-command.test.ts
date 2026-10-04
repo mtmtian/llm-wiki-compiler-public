@@ -3,9 +3,10 @@
  * Also covers the runEval() credential guard in src/eval/index.ts.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { parseSampleSize } from "../src/commands/eval.js";
 import { runEval } from "../src/eval/index.js";
+import { createEnvSnapshot } from "./fixtures/env-snapshot.js";
 import { useLintTempRoot } from "./fixtures/lint-temp-root.js";
 
 describe("parseSampleSize", () => {
@@ -32,11 +33,18 @@ describe("parseSampleSize", () => {
 
 describe("runEval credential guard", () => {
   const env = useLintTempRoot("eval-cmd");
+  const settingsEnv = createEnvSnapshot([]);
+
+  // Sever the ~/.claude/settings.json fallback so a token configured there cannot satisfy the guard.
+  beforeEach(() => {
+    settingsEnv.setEnv({ LLMWIKI_CLAUDE_SETTINGS_PATH: "/path/does/not/exist.json" });
+  });
 
   afterEach(() => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     delete process.env.LLMWIKI_PROVIDER;
+    settingsEnv.restore();
   });
 
   it("throws a clean credential error for full suite when anthropic key is absent", async () => {
