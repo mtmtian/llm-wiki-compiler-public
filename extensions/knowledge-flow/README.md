@@ -312,7 +312,13 @@ Consolidation uses the same evidence rules for editing and independent review: a
 can authorize its clearly referenced proposal, while assistant reports remain dated, attributed and
 unverified historical lessons. Evidence capture and page publication dates do not establish current validity.
 For a quote-binding-only rejection, the reviewer may select exact frozen quote IDs; the program changes
-only those bindings and requires a fresh complete review. When every existing page and its labels remain
+only those bindings and requires a fresh complete review. For a prose correction, the reviewer can list
+`retainEvidenceForClaims`: matching claims on the same page keep their primary and supporting references,
+even when their wording was rejected. The editor receives the full per-claim findings. A rejected claim
+without that advice may select different evidence. Every correction still requires a fresh complete review.
+Claims must keep each independently supported assertion separate; a command cannot prove its result,
+and a claim must be narrowed or split when its quote does not cover every stated fact.
+When every existing page and its labels remain
 unchanged with no new claims or citation retirements, independent review may confirm that no durable
 knowledge is missing and finish the batch without publishing a revision.
 

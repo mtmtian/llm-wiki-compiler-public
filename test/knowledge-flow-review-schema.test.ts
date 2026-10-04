@@ -22,7 +22,8 @@ it.each([
 ])("Given an empty review scope $claims/$pages/$retired, When sent to Codex, Then wire schema supports emptiness without allowing invented coverage", async ({ claims, pages, retired }) => {
   const review = { decision: "accept", reason: "checked", checkedClaimIndexes: claims ? [0] : [],
     checkedPageIds: pages, checkedRetiredCitations: retired,
-    claimDecisions: claims ? [{ claimIndex: 0, decision: "accept", reason: "supported" }] : [], quoteRepairs: [] };
+    claimDecisions: claims ? [{ claimIndex: 0, decision: "accept", reason: "supported" }] : [],
+    quoteRepairs: [], retainEvidenceForClaims: [] };
   const tool = createTopicReviewTool(claims, pages, retired);
   const fake = await installFakeCodex({ toolOutput: review }); fakes.push(fake);
   vi.stubEnv("PATH", `${fake.binDir}${path.delimiter}${process.env.PATH ?? ""}`);
@@ -30,6 +31,7 @@ it.each([
   expect(JSON.parse(output)).toEqual(review);
   const [call] = await fake.calls();
   expect(JSON.stringify(call.schema)).not.toContain('"not":');
+  expect(JSON.stringify(call.schema)).not.toContain('"uniqueItems":');
   const validate = new Ajv({ strict: false }).compile(tool.input_schema);
   const wireValidate = new Ajv({ strict: false }).compile(call.schema as object);
   for (const accepts of [validate, wireValidate]) {
@@ -39,6 +41,8 @@ it.each([
     expect(accepts({ ...review, checkedRetiredCitations: ["^[invented.md:1]"] })).toBe(false);
     expect(accepts({ ...review, claimDecisions: [{ claimIndex: claims, decision: "accept", reason: "invented" }] })).toBe(false);
     expect(accepts({ ...review, quoteRepairs: [{ claimIndex: 0, quoteId: "invented" }] })).toBe(false);
+    expect(accepts({ ...review, retainEvidenceForClaims: [claims] })).toBe(false);
+    expect(accepts({ ...review, retainEvidenceForClaims: [0, 0] })).toBe(false);
   }
   const { claimDecisions: _omitted, ...withoutConclusions } = review;
   expect(validate(withoutConclusions)).toBe(true);

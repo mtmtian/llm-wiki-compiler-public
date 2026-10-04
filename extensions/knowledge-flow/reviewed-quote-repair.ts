@@ -8,6 +8,7 @@ interface ReviewRepair {
   decision: string;
   claimDecisions?: Array<{ claimIndex: number; decision: string }>;
   quoteRepairs?: Array<{ claimIndex: number; quoteId: string }>;
+  retainEvidenceForClaims?: number[];
 }
 
 interface Replacement { evidenceId: string; quote: string; }
@@ -19,6 +20,7 @@ export function applyReviewedQuoteRepairs(draft: TopicDraft, review: ReviewRepai
   const disputed = rejectedClaimIndexes(review.claimDecisions, draft.claims.length);
   const targets = suggestionTargets(review.quoteRepairs, disputed);
   if (!targets) return null;
+  if (review.retainEvidenceForClaims?.some(index => targets.has(index))) return null;
   const replacements = replacementMap(targets, draft, catalog, evidence);
   if (!replacements) return null;
   return { ...draft, claims: draft.claims.map((claim, index) => {

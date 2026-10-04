@@ -1,10 +1,10 @@
 /**
  * A correction must not move a claim to unrelated evidence. Corrections pick evidence from frozen quote
- * options, and nearly half of stored corrections pinned every claim to one option (often an old user
- * message) although the first draft cited the right evidence. When a corrected claim is clearly the same
+ * options, which can accidentally pin claims to an unrelated user message even when the first draft
+ * cited the right evidence. When a corrected claim is clearly the same
  * claim as before, its original evidence is restored: the original exact quote, or the original evidence's
  * option that overlaps the previous quote most. Rewritten or ambiguous claims, and claims the previous
- * review did not accept, keep the correction's choice.
+ * review did not accept and did not explicitly retain, keep the correction's choice.
  */
 import { describe, expect, it } from "vitest";
 import { preserveEvidence } from "../extensions/knowledge-flow/quote-repair.js";
@@ -73,7 +73,38 @@ describe("evidence preservation across a correction", () => {
     const corrected = withClaims([lesson(first, "u2", "继续")]);
     expect(preserveEvidence(corrected, previous, { ...context, disputed: new Set([0]) })).toEqual(corrected);
   });
+});
 
+describe("reviewed evidence retention", () => {
+  it("Given review requests wording changes while retaining evidence, Then rejected claims keep their original references", () => {
+    const previous = withClaims([lesson(`助手在采集日期报告：${first}`, "a1", exactFirst)]);
+    const corrected = withClaims([lesson(`本批次捕获的助手报告：${first}`, "u2", "继续")]);
+    const retained = { ...context, disputed: new Set([0]), retained: new Set([0]) };
+    expect(preserveEvidence(corrected, previous, retained).claims[0]).toMatchObject({ evidenceId: "a1", quote: exactFirst });
+  });
+
+  it("Given retained evidence and a different passage in the same message, Then the exact original quote survives", () => {
+    const previous = withClaims([lesson(first, "a1", exactFirst)]);
+    const corrected = withClaims([lesson(first, "a1", second)]);
+    const retained = { ...context, disputed: new Set([0]), retained: new Set([0]) };
+    expect(preserveEvidence(corrected, previous, retained).claims[0].quote).toBe(exactFirst);
+  });
+
+  it("Given similar words on a different destination, Then retention cannot transfer evidence across pages", () => {
+    const previous = withClaims([lesson(first, "a1", exactFirst)]);
+    const corrected = withClaims([{ ...lesson(first, "u2", "继续"), targetPageId: "concepts/another-topic" }]);
+    expect(preserveEvidence(corrected, previous, context)).toEqual(corrected);
+  });
+
+  it("Given retained approval with supporting terms, Then correction cannot drop the approved proposal", () => {
+    const previous = withClaims([{ ...lesson(first, "u2", "继续"), supportingQuotes: [{ evidenceId: "a1", quote: exactFirst }] }]);
+    const corrected = withClaims([lesson(first, "u2", "继续")]);
+    const retained = { ...context, disputed: new Set([0]), retained: new Set([0]) };
+    expect(preserveEvidence(corrected, previous, retained).claims[0].supportingQuotes).toEqual(previous.claims[0].supportingQuotes);
+  });
+});
+
+describe("consolidation evidence preservation", () => {
   it("Given a correction that pins every claim to the first option, When consolidated, Then claims keep their own evidence", async () => {
     const kinds = await pinnedCorrection("共 120 个样例请求均未因缺少虚构计数而被拒绝", () => ({ ...accepted(), checkedClaimIndexes: [0, 1] }));
     expect(kinds).toEqual(["user", "assistant"]);

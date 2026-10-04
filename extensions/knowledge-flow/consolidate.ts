@@ -36,7 +36,10 @@ interface TopicReview {
   /** Optional to the program: nothing depends on it until the ledger gate (claim-decisions.ts). */
   claimDecisions?: ClaimDecision[];
   quoteRepairs?: Array<{ claimIndex: number; quoteId: string }>;
+  retainEvidenceForClaims?: number[];
 }
+
+interface DraftCorrection { reason: string; previousDraft: TopicDraft; review?: TopicReview; }
 
 /** Process a bounded increment using durable session context and its complete scoped topic catalog. */
 export async function consolidateSession(input: FlowJob, config: FlowConfig, existing: ReadonlyMap<string, string>): Promise<FlowResult> {
@@ -81,7 +84,7 @@ async function editAndReview(job: FlowJob, config: FlowConfig, context: EditCont
   const run: EditRunContext = { job, config, topic: context,
     request: { stateDir: config.stateDir, jobId: job.id, model: config.model, provider }, reviewer,
     correctionCatalog: buildCorrectionEvidence(job.evidence), claimReviews: [] };
-  let correction: { reason: string; previousDraft: TopicDraft } | undefined;
+  let correction: DraftCorrection | undefined;
   for (const stage of [undefined, "correction"]) {
     const outcome = await runEditStage(run, stage, correction);
     if (outcome.result) {
@@ -105,21 +108,22 @@ interface EditRunContext {
   reviewed?: NonNullable<FlowResult["contribution"]>;
 }
 type DraftAttemptResult = { ok: true; draft: TopicDraft } | { ok: false; error: string };
-interface EditStageResult { result?: FlowResult; correction?: { reason: string; previousDraft: TopicDraft }; }
+interface EditStageResult { result?: FlowResult; correction?: DraftCorrection; }
 
 async function runEditStage(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined): Promise<EditStageResult> {
+  correction: DraftCorrection | undefined): Promise<EditStageResult> {
   const attempt = await draftAttempt(run, stage, correction);
   if (!attempt.ok) return { result: held(run.job, attempt.error, correction?.previousDraft.summary ?? "") };
   const anchored = correction ? preserveEvidence(attempt.draft, correction.previousDraft, { evidence: run.job.evidence,
-    catalog: run.correctionCatalog, disputed: disputedClaims(run.claimReviews.at(-1)) }) : attempt.draft;
+    catalog: run.correctionCatalog, disputed: disputedClaims(run.claimReviews.at(-1)),
+    retained: new Set(correction.review?.retainEvidenceForClaims ?? []) }) : attempt.draft;
   const repaired = withRepairedQuotes(anchored, run.job.evidence);
   const draft = withRepairedCitations(withRoleAuthority(repaired, run.job.evidence), run.topic.pages);
   return validateAndReviewStage(run, stage, correction, draft);
 }
 
 async function validateAndReviewStage(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined, draft: TopicDraft): Promise<EditStageResult> {
+  correction: DraftCorrection | undefined, draft: TopicDraft): Promise<EditStageResult> {
   const outcome = await reviewedDraft(run, stage, draft);
   if ("error" in outcome) return validationFailure(run, stage, correction, draft, outcome.error);
   const { review, contribution } = outcome;
@@ -129,7 +133,7 @@ async function validateAndReviewStage(run: EditRunContext, stage: string | undef
     if (repaired) return reviewedQuoteRepair(run, repaired);
   }
   if (finalRejection(review, stage)) return { result: await acceptedClaimsOnly(run, draft, review) };
-  return { correction: { reason: review.reason, previousDraft: draft } };
+  return { correction: { reason: review.reason, previousDraft: draft, review } };
 }
 
 /** A quote-only repair replaces the editor correction and receives one complete independent review. */
@@ -182,14 +186,14 @@ function narrowedTopic(topic: EditContext, draft: TopicDraft): EditContext {
     plan: { ...topic.plan, pages: kept.map(index => topic.plan.pages[index]) } };
 }
 
-function validationFailure(run: EditRunContext, stage: string | undefined, correction: { reason: string; previousDraft: TopicDraft } | undefined,
+function validationFailure(run: EditRunContext, stage: string | undefined, correction: DraftCorrection | undefined,
   draft: TopicDraft, reason: string): EditStageResult {
   if (!stage) return { correction: { reason, previousDraft: draft } };
   return { result: held(run.job, reason, draft.summary ?? correction?.previousDraft.summary ?? "") };
 }
 
 async function draftAttempt(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined): Promise<DraftAttemptResult> {
+  correction: DraftCorrection | undefined): Promise<DraftAttemptResult> {
   const tool = draftTool(run, stage);
   try {
     const modelDraft = await loadDraftModel(run, stage, correction, tool);
@@ -206,14 +210,14 @@ function draftTool(run: EditRunContext, stage: string | undefined) {
 }
 
 async function loadDraftModel(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined, tool: ReturnType<typeof createCorrectionEditTool>): Promise<TopicDraft | CorrectionTopicDraft> {
+  correction: DraftCorrection | undefined, tool: ReturnType<typeof createCorrectionEditTool>): Promise<TopicDraft | CorrectionTopicDraft> {
   const system = withTopicScope(run.job, stage ? correctionEditSystem : editSystem);
   return durableModel<TopicDraft | CorrectionTopicDraft>({ ...run.request, stage, tool, system,
     prompt: draftPrompt(run, stage, correction), tokens: 12000 });
 }
 
 function draftPrompt(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined): string {
+  correction: DraftCorrection | undefined): string {
   const correctionContext = correction ? { ...correction, diagnostics: correction.reason,
     unaccountedCitations: unaccountedCitations(correction.previousDraft, run.topic.pages),
     claimAnchors: claimAnchors(correction.previousDraft, run.correctionCatalog) } : undefined;

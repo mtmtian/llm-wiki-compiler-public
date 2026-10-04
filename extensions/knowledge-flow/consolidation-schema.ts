@@ -33,6 +33,7 @@ const claimDecisions = (claimIndex: Record<string, unknown>, maxItems = MAX_CLAI
 const reviewOutput = object({ decision: verdict, reason: text(2000),
   checkedClaimIndexes: array(index, 5), checkedPageIds: array(text(180), 5) },
   { checkedRetiredCitations: array(text(1024), 500), claimDecisions: claimDecisions(index),
+    retainEvidenceForClaims: array(index, 5),
     quoteRepairs: array(object({ claimIndex: index, quoteId: text(180) }), 5) });
 
 function allowedStrings(values: readonly string[], maxLength: number): Record<string, unknown> {
@@ -181,5 +182,6 @@ export function createTopicReviewTool(claimCount: number, pageIds: readonly stri
       checkedPageIds: array(pageSchema, Math.min(5, pageIds.length)) },
     { checkedRetiredCitations: array(retirementSchema, Math.min(500, retirementCitations.length)),
       claimDecisions: claimDecisions(allowedIndexes(claimIndexes), claimCount ? MAX_CLAIM_DECISIONS : 0),
+      retainEvidenceForClaims: array(allowedIndexes(claimIndexes), claimCount),
       quoteRepairs: quoteRepairSchema }) };
 }

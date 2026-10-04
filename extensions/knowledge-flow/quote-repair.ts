@@ -12,10 +12,10 @@
  * Paraphrases and fragments stitched with ellipses stay unchanged for the validator. Evidence
  * roles are applied afterwards, so a rebound claim gets the authority of its real source.
  *
- * A correction must not move a claim to unrelated evidence either: nearly half of stored corrections
- * pinned every claim to one quote option (often an old user message). preserveEvidence keeps a
- * corrected claim on the evidence it cited before whenever it is clearly the same claim, unless the
- * previous review did not accept that claim (then a different source may be the fix).
+ * A correction must not move a claim to unrelated evidence. preserveEvidence keeps a corrected
+ * claim's original references when the review accepted the claim or explicitly retained its evidence
+ * while requesting a prose repair. Other disputed claims may choose a different source. All corrected
+ * claims still pass normal validation and a fresh independent whole-page review.
  */
 import type { FlowClaim, FlowEvidence } from "./types.js";
 import type { TopicDraft } from "./consolidation-draft.js";
@@ -107,23 +107,28 @@ export interface PreservationContext {
   catalog: readonly CorrectionEvidence[];
   /** Previous claim indexes the review did not accept; their evidence may legitimately change. */
   disputed: ReadonlySet<number>;
+  /** The reviewer explicitly found these references suitable for the requested prose repair. */
+  retained?: ReadonlySet<number>;
 }
 
-/** Restore each corrected claim to the evidence it cited before, when it is clearly the same, undisputed claim. */
+/** Restore references only for an unambiguous same-page claim whose evidence the review retained. */
 export function preserveEvidence(corrected: TopicDraft, previous: TopicDraft, context: PreservationContext): TopicDraft {
+  const protectedClaims = previous.claims.filter((_, index) => !context.disputed.has(index) || context.retained?.has(index));
   return { ...corrected, claims: corrected.claims.map(claim => {
     const index = sameClaim(claim, previous.claims);
-    const before = index === undefined || context.disputed.has(index) ? undefined : previous.claims[index];
-    const source = before ? context.evidence.find(item => item.id === before.evidenceId) : undefined;
-    if (!before || !source || before.evidenceId === claim.evidenceId) return claim;
+    const before = index === undefined ? undefined : previous.claims[index];
+    if (!before || !protectedClaims.includes(before)) return claim;
+    const source = context.evidence.find(item => item.id === before.evidenceId);
+    if (!source) return claim;
     const quote = source.text.includes(before.quote) ? before.quote : bestOption(context.catalog, before);
-    return quote ? { ...claim, evidenceId: before.evidenceId, quote } : claim;
+    return quote ? { ...claim, evidenceId: before.evidenceId, quote, supportingQuotes: before.supportingQuotes } : claim;
   }) };
 }
 
 /** Index of the only previous claim whose text is nearly the same; none when there are zero or several. */
 function sameClaim(claim: FlowClaim, previous: readonly FlowClaim[]): number | undefined {
-  const matches = previous.flatMap((item, index) => similarity(item.text, claim.text) >= SAME_CLAIM ? [index] : []);
+  const matches = previous.flatMap((item, index) => item.targetPageId === claim.targetPageId
+    && similarity(item.text, claim.text) >= SAME_CLAIM ? [index] : []);
   return matches.length === 1 ? matches[0] : undefined;
 }
 
