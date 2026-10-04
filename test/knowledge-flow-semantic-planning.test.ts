@@ -199,6 +199,29 @@ describe("semantic topic planning", () => {
     expect(captured.map(call => call.tool)).toEqual(["knowledge_topic_plan", "knowledge_topic_edit", "knowledge_topic_review"]);
   });
 
+  it("Given a scoped page whose generated frontmatter exceeds the page budget, When a semantic job runs, Then it still plans and submits", async () => {
+    const input = revisionJob("semantic");
+    const runtime = config();
+    const page = wikiPage(sharedPage, 0, 100, 12_500);
+    seedPages(runtime, input, [page]);
+    expect(page.text.length).toBeGreaterThan(12_000);
+    const captured: Record<string, any>[] = [];
+    runtime.provider = fakeProvider(input, captured);
+    runtime.reviewer = runtime.provider;
+    expect((await processJob(input, runtime)).status).toBe("submitted");
+    expect(captured[0].tool).toBe("knowledge_topic_plan");
+  });
+
+  it("Given a scoped page whose body exceeds the page budget, When a semantic job runs, Then it is rejected before planning", async () => {
+    const input = revisionJob("semantic");
+    const runtime = config();
+    seedPages(runtime, input, [wikiPage(sharedPage, 0, 12_100)]);
+    const captured: Record<string, any>[] = [];
+    runtime.provider = fakeProvider(input, captured);
+    expect(await processJob(input, runtime)).toMatchObject({ status: "error", error: "scoped page exceeds review budget" });
+    expect(captured).toEqual([]);
+  });
+
   it("Given a semantic catalog above budget, When processJob reads the wiki, Then rejects before planning", async () => {
     const input = revisionJob("semantic");
     const runtime = config();
