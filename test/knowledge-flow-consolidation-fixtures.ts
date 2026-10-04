@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { onTestFinished } from "vitest";
+import { expect, onTestFinished } from "vitest";
 import type { TopicPlan } from "../extensions/knowledge-flow/consolidation-plan.js";
 import { sha256Text } from "../src/connectors/hash.js";
 import { buildFrontmatter } from "../src/utils/markdown.js";
@@ -69,21 +69,93 @@ export function runConsolidation(input: FlowJob, responses: Record<string, unkno
   return consolidateSession(input, config(responses, onSystem), pages);
 }
 
+export async function runConsolidationWithCalls(input: FlowJob, responses: Record<string, unknown>,
+  pages: ReadonlyMap<string, string>) {
+  const calls: string[] = [];
+  const result = await runConsolidation(input, responses, pages, (_system, name) => calls.push(name));
+  return { result, calls };
+}
+
 function toCorrectionShape(toolName: string, request: Record<string, any>, value: unknown): unknown {
   if (toolName === "knowledge_topic_plan" && request.correction) return { plan: value };
-  if (toolName !== "knowledge_topic_edit" || !request.correction || !value || typeof value !== "object") return value;
-  const options = (request.evidence ?? []).flatMap((item: any) => item.quoteOptions ?? []);
-  const quoteId = (quote: string) => options.find((item: any) => item.quote === quote)?.quoteId ?? "unknown-quote";
+  if (toolName !== "knowledge_topic_edit" || !value || typeof value !== "object") return value;
+  if (request.correction && "claimUpdates" in (value as Record<string, unknown>)) return value;
+  const quoteId = (evidenceId: string, quote: string) => {
+    const source = (request.evidence ?? []).find((item: any) => item.id === evidenceId);
+    return source?.quoteOptions?.find((item: any) => item.quote === quote)?.quoteId ?? "unknown-quote";
+  };
   const draft = value as Record<string, any>;
+  if (!request.correction) return quoteBoundDraft(draft, quoteId);
+  return correctionPatch(draft, request.correction.previousDraft, quoteId);
+}
+
+function quoteBoundDraft(draft: Record<string, any>, quoteId: (evidenceId: string, quote: string) => string): Record<string, unknown> {
   return { ...draft, claims: (draft.claims ?? []).map((claim: Record<string, any>) => {
     const { quote, evidenceId: _evidenceId, topic: _topic, decisionObject: _decisionObject, supportingQuotes, ...fields } = claim;
-    return { ...fields, quoteId: claim.quoteId ?? quoteId(quote),
-      supportingQuotes: (supportingQuotes ?? []).map((item: Record<string, any>) => ({
-        quoteId: item.quoteId ?? quoteId(item.quote),
-      })) };
+    return { ...fields, quoteId: claim.quoteId ?? quoteId(_evidenceId, quote), supportingQuotes: (supportingQuotes ?? []).map((item: Record<string, any>) => ({
+      quoteId: item.quoteId ?? quoteId(item.evidenceId, item.quote),
+    })) };
   }) };
+}
+
+export function quoteBoundDraftFromCatalog(draft: Record<string, any>, catalog: Array<Record<string, any>>): Record<string, unknown> {
+  const quoteId = (evidenceId: string, quote: string) => catalog.find(item => item.id === evidenceId)
+    ?.quoteOptions.find((option: Record<string, any>) => option.quote === quote)?.quoteId ?? "unknown-quote";
+  return quoteBoundDraft(draft, quoteId);
+}
+
+function correctionPatch(draft: Record<string, any>, previous: Record<string, any>,
+  quoteId: (evidenceId: string, quote: string) => string): Record<string, unknown> {
+  const oldClaims = previous.claims as Array<Record<string, any>>;
+  const claimUpdates = (draft.claims ?? []).flatMap((claim: Record<string, any>, index: number) => {
+    const old = oldClaims.find(item => item.claimId === claim.claimId) ?? oldClaims[index];
+    if (!old) return [];
+    const { evidenceId: _evidenceId, quote: _quote, topic: _topic, decisionObject: _decisionObject, supportingQuotes, ...fields } = claim;
+    const fieldValues = Object.fromEntries(Object.entries(fields).filter(([key, value]) => key !== "quoteId"
+      && key !== "supportingQuoteIds" && !Object.is(old[key], value)));
+    const nextQuoteId = claim.quoteId ?? quoteId(_evidenceId, _quote);
+    const changes = Object.entries(fieldValues).map(([field, value]) => ({ field, value }));
+    if (old.quoteId !== nextQuoteId) changes.push({ field: "quoteId", value: nextQuoteId });
+    const nextSupports = (supportingQuotes ?? []).map((item: Record<string, any>) => item.quoteId ?? quoteId(item.evidenceId, item.quote));
+    if (JSON.stringify(old.supportingQuoteIds ?? []) !== JSON.stringify(nextSupports)) {
+      changes.push({ field: "supportingQuoteIds", value: nextSupports });
+    }
+    return changes.length ? [{ claimId: old.claimId, changes }] : [];
+  });
+  const keptIds = new Set((draft.claims ?? []).map((_claim: unknown, index: number) => oldClaims[index]?.claimId).filter(Boolean));
+  return { claimUpdates, droppedClaimIds: oldClaims.filter(claim => !keptIds.has(claim.claimId)).map(claim => claim.claimId),
+    pages: (draft.pages ?? []).map((page: Record<string, any>) => {
+      const { claimIndexes, ...fields } = page;
+      return { ...fields, claimIds: claimIndexes.map((index: number) => oldClaims[index]?.claimId),
+        body: stableClaimMarkers(page.body, oldClaims),
+        ...(page.citationRetirements ? { citationRetirements: page.citationRetirements.map((item: Record<string, any>) => ({
+          ...item, replacement: stableClaimMarkers(item.replacement, oldClaims),
+        })) } : {}) };
+    }),
+    summary: draft.summary };
+}
+
+export function stableClaimMarkers(value: string, claims: Array<Record<string, any>>): string {
+  return value.replace(/\{\{claim:(\d+)\}\}/g, (_marker, rawIndex: string) => {
+    const index = Number(rawIndex);
+    return `{{claim:${claims[index]?.claimId ?? `c${rawIndex}`}}}`;
+  });
 }
 
 export function accepted() {
   return { decision: "accept", reason: "保留旧预算历史，原文明确支持新预算与同一对象", checkedClaimIndexes: [0], checkedPageIds: [pageId] };
+}
+
+export function expectNeedsReview(result: FlowResult): void {
+  expect(result.status).toBe("needs_review");
+  expect(result.contribution).toBeUndefined();
+}
+
+export function expectNoReadablePage(result: FlowResult): void {
+  expect(result.contribution).toBeUndefined();
+  expect(result.error).toMatch(/citation.*prose/);
+}
+
+export function expectNoReview(calls: readonly string[]): void {
+  expect(calls.filter(name => name === "knowledge_topic_review")).toHaveLength(0);
 }

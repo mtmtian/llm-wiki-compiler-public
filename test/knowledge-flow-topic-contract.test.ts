@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import Ajv from "ajv";
 import { describe, expect, it, vi } from "vitest";
 import { extractClaims, validateClaims } from "../extensions/knowledge-flow/extract.js";
-import { createCorrectionEditTool, createEditTool, createPlanTool, createTopicReviewTool, topicReviewTool } from "../extensions/knowledge-flow/consolidation-schema.js";
+import { createQuoteBoundEditTool, createPlanTool, createTopicReviewTool, topicReviewTool } from "../extensions/knowledge-flow/consolidation-schema.js";
 import { buildCorrectionEvidence } from "../extensions/knowledge-flow/consolidation-quotes.js";
 import { reviewClaims } from "../extensions/knowledge-flow/review.js";
 import type { FlowClaim, FlowEvidence, FlowJob } from "../extensions/knowledge-flow/types.js";
@@ -96,8 +96,14 @@ describe("knowledge-flow topic identity contract", () => {
   it("binds correction schemas to frozen evidence and page destinations", () => {
     const planSchema = createPlanTool(["concepts/sample-material-promotion"]).input_schema as any;
     expect(planSchema.properties.plan.anyOf[0].properties.pages.items.properties.targetPageId.anyOf[0].enum).toEqual(["concepts/sample-material-promotion"]);
-    const editSchema = createEditTool(["concepts/sample-material-promotion"], ["e1"]).input_schema as any;
-    expect(editSchema.properties.claims.items.properties.evidenceId.enum).toEqual(["e1"]);
+    const catalog = buildCorrectionEvidence([evidence]);
+    const editSchema = createQuoteBoundEditTool(["concepts/sample-material-promotion"], catalog).input_schema as any;
+    const branches = editSchema.properties.claims.items.anyOf;
+    const decision = branches.find((branch: any) => branch.properties.kind.enum.includes("decision"));
+    expect(decision.properties.quoteId.enum).toEqual(catalog[0].quoteOptions.map(option => option.quoteId));
+    expect(decision.properties.targetPageId.enum).toEqual(["concepts/sample-material-promotion"]);
+    expect(decision.properties).not.toHaveProperty("evidenceId");
+    expect(decision.properties).not.toHaveProperty("quote");
     expect(editSchema.properties.pages.items.properties.pageId.enum).toEqual(["concepts/sample-material-promotion"]);
   });
 
@@ -137,7 +143,7 @@ describe("knowledge-flow topic identity contract", () => {
       const evidenceText = "保留证据";
       const catalog = buildCorrectionEvidence([{ id: "e1", kind: "user", text: evidenceText,
         locator: "turn:e1", observedAt: "2026-09-21T00:00:00Z", sha256: createHash("sha256").update(evidenceText).digest("hex") }]);
-      const editSchema = createCorrectionEditTool(["concepts/sample-material-promotion"], catalog).input_schema as any;
+      const editSchema = createQuoteBoundEditTool(["concepts/sample-material-promotion"], catalog).input_schema as any;
       const replacementSchema = editSchema.properties.pages.items.properties.citationRetirements.items.properties.replacement;
       const validate = new Ajv({ strict: false }).compile(replacementSchema);
       expect(validate(replacement)).toBe(false);

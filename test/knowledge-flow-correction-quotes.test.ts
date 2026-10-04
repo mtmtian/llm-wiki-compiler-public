@@ -1,8 +1,8 @@
 /** Correction quote IDs preserve source bytes and restore their original source identity. */
 import { describe, expect, it } from "vitest";
 import { buildCorrectionEvidence, resolveQuote } from "../extensions/knowledge-flow/consolidation-quotes.js";
-import { resolveCorrectionDraft, validatedDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
-import type { CorrectionTopicDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
+import { resolveQuoteBoundDraft, validatedDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
+import type { QuoteBoundTopicDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
 import { sha256Text } from "../src/connectors/hash.js";
 import type { FlowEvidence, FlowJob } from "../extensions/knowledge-flow/types.js";
 import type { PlannedPage } from "../extensions/knowledge-flow/consolidation-plan.js";
@@ -60,14 +60,15 @@ describe("correction quote catalog", () => {
     const support = evidence("e2", "支持上下文");
     const catalog = buildCorrectionEvidence([primary, support]);
     const first = catalog[0].quoteOptions[0]; const second = catalog[1].quoteOptions[0];
-    const resolved = resolveCorrectionDraft({ claims: [{
-      text: primary.text, quoteId: first.quoteId, title: "保留代码",
-      slug: "code", targetPageId: "concepts/code", kind: "decision", status: "decided", useWhen: "需要保留时", rationale: "用户明确要求",
-      replacementIntent: false, supportingQuotes: [{ quoteId: second.quoteId }],
+    const resolved = resolveQuoteBoundDraft({ claims: [{
+      text: primary.text, quoteId: first.quoteId, title: "保留代码", slug: "code", targetPageId: "concepts/code",
+      kind: "decision", status: "decided", useWhen: "需要保留时", rationale: "用户明确要求", replacementIntent: false,
+      supportingQuotes: [{ quoteId: second.quoteId }],
     }], pages: [], summary: "保留代码" }, catalog, [page("concepts/code", "规范主题", "规范对象")]);
-    expect(resolved.claims[0].evidenceId).toBe("e1");
-    expect(resolved.claims[0].quote).toBe(first.quote);
-    expect(resolved.claims[0].supportingQuotes).toEqual([{ evidenceId: "e2", quote: support.text }]);
+    const { draft: restored } = resolved;
+    expect(restored.claims[0].evidenceId).toBe("e1");
+    expect(restored.claims[0].quote).toBe(first.quote);
+    expect(restored.claims[0].supportingQuotes).toEqual([{ evidenceId: "e2", quote: support.text }]);
   });
 
   it("restores canonical destination metadata instead of trusting model labels", () => {
@@ -76,16 +77,16 @@ describe("correction quote catalog", () => {
     const modelDraft = { claims: [{
       text: source.text, quoteId: option.quoteId, title: "规范页", slug: "code", targetPageId: "concepts/code",
       kind: "decision", status: "decided", useWhen: "需要保留时", rationale: "用户确认", replacementIntent: false,
-      supportingQuotes: [], topic: "模型改写主题", decisionObject: "模型改写对象",
-    }], pages: [], summary: "保留实现" } as unknown as CorrectionTopicDraft;
-    const resolved = resolveCorrectionDraft(modelDraft, catalog, [page("concepts/code")]);
+      supportingQuotes: [],
+    }], pages: [], summary: "保留实现" } satisfies QuoteBoundTopicDraft;
+    const { draft: resolved } = resolveQuoteBoundDraft(modelDraft, catalog, [page("concepts/code")]);
     expect(resolved.claims[0]).toMatchObject({ topic: "规范主题", decisionObject: "规范对象", targetPageId: "concepts/code" });
   });
 
   it("rejects a target page that is outside the frozen planned pages", () => {
     const source = evidence("e1", "用户确认保留实现"); const catalog = buildCorrectionEvidence([source]);
     const option = catalog[0].quoteOptions[0];
-    expect(() => resolveCorrectionDraft({ claims: [{
+    expect(() => resolveQuoteBoundDraft({ claims: [{
       text: source.text, quoteId: option.quoteId, title: "规范页", slug: "code", targetPageId: "concepts/unknown",
       kind: "decision", status: "decided", useWhen: "需要保留时", rationale: "用户确认", replacementIntent: false,
       supportingQuotes: [],
@@ -102,7 +103,7 @@ describe("correction quote catalog", () => {
       targetPageId: pages[index].pageId, kind: "decision" as const, status: "decided" as const,
       useWhen: "需要保留时", rationale: "用户确认", replacementIntent: false, supportingQuotes: [],
     }));
-    const restored = resolveCorrectionDraft({ claims, pages: [], summary: "保留两项" }, catalog, pages);
+    const { draft: restored } = resolveQuoteBoundDraft({ claims, pages: [], summary: "保留两项" }, catalog, pages);
     const crossed = { ...restored, pages: [
       { pageId: pages[1].pageId, body: "{{claim:0}}", claimIndexes: [0] },
       { pageId: pages[0].pageId, body: "{{claim:1}}", claimIndexes: [1] },

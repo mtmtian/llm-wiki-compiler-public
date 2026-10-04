@@ -1,5 +1,6 @@
 /** Validate whole-topic edits against frozen destinations and exact source evidence before independent review. */
 import { sha256Text } from "../../src/connectors/hash.js";
+import { authorityViolation } from "./authority-policy.js";
 import { parseFrontmatter } from "../../src/utils/markdown.js";
 import { diagnoseClaims, formatClaimDiagnostics } from "./extract.js";
 import type { FlowClaim, FlowEvidence, FlowJob } from "./types.js";
@@ -10,7 +11,7 @@ import { validateCitationChanges, validateRetirementReferences } from "./citatio
 import type { CitationRetirement } from "./citation-retirement.js";
 import { resolveQuote } from "./consolidation-quotes.js";
 import type { CorrectionEvidence } from "./consolidation-quotes.js";
-import { unexpandedPlaceholder } from "./kept-paragraphs.js";
+import { pageParagraphs, unexpandedPlaceholder } from "./kept-paragraphs.js";
 
 export interface TopicDraft {
   claims: FlowClaim[];
@@ -18,36 +19,52 @@ export interface TopicDraft {
   summary: string;
 }
 
-/** Correction output chooses IDs; source text and destination identity are restored after model output. */
-export type CorrectionClaim = Omit<FlowClaim, "evidenceId" | "quote" | "topic" | "decisionObject" | "supportingQuotes"> & {
+/** Model output chooses source IDs; source text and page metadata stay program-owned. */
+export type QuoteBoundClaim = Omit<FlowClaim, "evidenceId" | "quote" | "topic" | "decisionObject" | "supportingQuotes"> & {
   quoteId: string;
   supportingQuotes: Array<{ quoteId: string }>;
 };
 
-export interface CorrectionTopicDraft {
-  claims: CorrectionClaim[];
+export interface QuoteBoundTopicDraft {
+  claims: QuoteBoundClaim[];
   pages: TopicDraft["pages"];
   summary: string;
 }
 
-/** Restore exact evidence and canonical destination metadata before normal validation. */
-export function resolveCorrectionDraft(draft: CorrectionTopicDraft, catalog: readonly CorrectionEvidence[],
-  frozenPages: readonly PlannedPage[]): TopicDraft {
-  return { ...draft, claims: draft.claims.map(claim => resolveCorrectionClaim(claim, catalog, frozenPages)) };
+/** Run-local claim identity and quote selectors never enter FlowClaim or publication output. */
+export interface StableClaimEntry {
+  claimId: string;
+  claim: FlowClaim;
+  quoteId: string;
+  supportingQuoteIds: string[];
 }
 
-function resolveCorrectionClaim(claim: CorrectionClaim, catalog: readonly CorrectionEvidence[],
+/** Restore exact source text and canonical page metadata from the frozen initial quote choices. */
+export function resolveQuoteBoundDraft(draft: QuoteBoundTopicDraft, catalog: readonly CorrectionEvidence[],
+  frozenPages: readonly PlannedPage[]): { draft: TopicDraft; stableClaims: StableClaimEntry[] } {
+  const claims = draft.claims.map(claim => resolveBoundClaim(claim, catalog, frozenPages));
+  const stableClaims = draft.claims.map((claim, index) => ({ claimId: `c${index}`, claim: claims[index],
+    quoteId: claim.quoteId,
+    supportingQuoteIds: normalizedSupportQuoteIds(claim.quoteId, claim.supportingQuotes.map(item => item.quoteId)) }));
+  return { draft: { ...draft, claims }, stableClaims };
+}
+
+function resolveBoundClaim(claim: QuoteBoundClaim, catalog: readonly CorrectionEvidence[],
   frozenPages: readonly PlannedPage[]): FlowClaim {
   const page = frozenPages.find(item => item.pageId === claim.targetPageId);
   if (!page) throw new Error(`unknown correction target page: ${claim.targetPageId ?? "null"}`);
   const primary = resolveQuote(catalog, claim.quoteId);
-  const supportingQuotes = claim.supportingQuotes.map(item => {
-    const option = resolveQuote(catalog, item.quoteId);
+  const supportingQuotes = normalizedSupportQuoteIds(claim.quoteId, claim.supportingQuotes.map(item => item.quoteId)).map(quoteId => {
+    const option = resolveQuote(catalog, quoteId);
     return { evidenceId: option.evidenceId, quote: option.quote };
   });
   const { quoteId: _quoteId, supportingQuotes: _supporting, ...fields } = claim;
   return { ...fields, topic: page.topic, decisionObject: page.decisionObject,
     evidenceId: primary.evidenceId, quote: primary.quote, supportingQuotes };
+}
+
+export function normalizedSupportQuoteIds(primaryQuoteId: string, supportingQuoteIds: readonly string[]): string[] {
+  return [...new Set(supportingQuoteIds)].filter(quoteId => quoteId !== primaryQuoteId);
 }
 
 /**
@@ -67,36 +84,6 @@ export function withSessionEvidence(job: FlowJob): FlowJob {
       ? { ...item, id: `e-${sha256Text(JSON.stringify(item)).slice(0, 32)}` } : item),
     origin: current.has(identity(item)) ? "current" as const : "earlier" as const }));
   return { ...job, evidence };
-}
-
-/**
- * Evidence role decides authority, so a mislabeled claim is corrected instead of holding the whole page.
- * Assistant-primary claims become historical lessons, artifact-primary decisions become historical facts,
- * and assistant supporting quotes stay only on user-primary claims. Text, quotes and targets never change,
- * and claims the model marked uncertain stay held for review.
- */
-export function withRoleAuthority(draft: TopicDraft, evidence: readonly FlowEvidence[]): TopicDraft {
-  const roles = new Map(evidence.map(item => [item.id, item.kind]));
-  return { ...draft, claims: draft.claims.map(claim => authorityFor(claim, roles)) };
-}
-
-function authorityFor(claim: FlowClaim, roles: ReadonlyMap<string, FlowEvidence["kind"]>): FlowClaim {
-  const primary = roles.get(claim.evidenceId);
-  if (claim.status === "uncertain" || primary === undefined) return claim;
-  return supportFor(kindFor(claim, primary), primary, roles);
-}
-
-/** The primary quote's speaker bounds what kind of knowledge the claim may state. */
-function kindFor(claim: FlowClaim, primary: FlowEvidence["kind"]): FlowClaim {
-  if (primary === "assistant") return { ...claim, kind: "lesson", status: "historical" };
-  if (primary === "artifact" && claim.kind === "decision") return { ...claim, kind: "fact", status: "historical" };
-  return claim;
-}
-
-/** Assistant context may explain a user's own statement, but cannot lend authority to anything else. */
-function supportFor(claim: FlowClaim, primary: FlowEvidence["kind"], roles: ReadonlyMap<string, FlowEvidence["kind"]>): FlowClaim {
-  if (primary === "user" || !claim.supportingQuotes) return claim;
-  return { ...claim, supportingQuotes: claim.supportingQuotes.filter(item => roles.get(item.evidenceId) !== "assistant") };
 }
 
 /** Only complete, unchanged existing pages may enter independent no-change review. Nothing is published. */
@@ -122,6 +109,7 @@ export function validatedDraft(draft: TopicDraft, job: FlowJob, pages: PlannedPa
   claims: FlowClaim[]; revisions: TopicRevision[];
 } {
   const allowed = pages.map(page => page.pageId);
+  assertExplicitAuthority(draft.claims, job.evidence);
   const diagnostics = diagnoseClaims(draft.claims, job.evidence, allowed, maximum);
   const claims = diagnostics.claims;
   if (diagnostics.diagnostics.length || !claims.length || claims.length !== draft.claims.length) {
@@ -150,6 +138,20 @@ export function validatedDraft(draft: TopicDraft, job: FlowJob, pages: PlannedPa
   return { claims, revisions };
 }
 
+function assertExplicitAuthority(claims: readonly FlowClaim[], evidence: readonly FlowEvidence[]): void {
+  const roles = new Map(evidence.map(item => [item.id, item.kind]));
+  for (const claim of claims) {
+    const violation = authorityViolation(claim, roles.get(claim.evidenceId));
+    if (violation) throw new Error(`topic draft claim validation failed: ${draftAuthorityMessages[violation]}`);
+  }
+}
+
+const draftAuthorityMessages = {
+  assistant: "assistant primary evidence supports only historical lessons",
+  artifact: "artifact evidence supports only historical facts, lessons or constraints",
+  decided: "decided claims require user-primary evidence",
+} as const;
+
 function validateEdit(edit: TopicDraft["pages"][number], page: PlannedPage, claims: FlowClaim[], seen: Set<number>): void {
   if (!edit.claimIndexes.length || edit.body.trimStart().startsWith("---") || edit.body.length > MAX_TOPIC_BODY_CHARS) throw new Error("invalid topic body");
   for (const index of edit.claimIndexes) {
@@ -175,5 +177,19 @@ function validateCitationMarkers(edit: TopicDraft["pages"][number], original: st
     throw new Error(`kept paragraph placeholder ${placeholder} was not expanded: write each keep placeholder alone on its own line, `
       + "and only in the body of the existing page that lists it");
   }
+  validateClaimProse(edit.body);
   validateCitationChanges([original ?? ""], edit.body, edit.citationRetirements, { claimIndexes: edit.claimIndexes });
+}
+
+/** Claim placeholders render citations only; a title or list marker cannot stand in for page prose. */
+function validateClaimProse(body: string): void {
+  for (const paragraph of pageParagraphs(body)) {
+    if (!/\{\{claim:\d+\}\}/.test(paragraph)) continue;
+    const prose = paragraph.replace(/^ {0,3}#{1,6}(?:[\t ]+|$).*$/gm, "")
+      .replace(/\{\{claim:\d+\}\}|\^\[[^\]\r\n]+\]/g, "")
+      .replace(/^[\t ]*(?:[-+*]|\d+[.)])[\t ]+/gm, "");
+    if (!/[\p{L}\p{N}]/u.test(prose)) {
+      throw new Error("topic body claim citation has no accompanying prose; write the supported assertion in the same paragraph");
+    }
+  }
 }

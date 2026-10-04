@@ -3,7 +3,7 @@
  * from holding a whole session batch.
  */
 import { describe, expect, it } from "vitest";
-import { validatedDraft, withRoleAuthority } from "../extensions/knowledge-flow/consolidation-draft.js";
+import { validatedDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
 import type { TopicDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
 import { resolvePlan } from "../extensions/knowledge-flow/consolidation-plan.js";
 import type { PlannedPage, TopicPlan } from "../extensions/knowledge-flow/consolidation-plan.js";
@@ -29,39 +29,31 @@ function claim(source: FlowEvidence, overrides: Partial<FlowClaim> = {}): FlowCl
 }
 
 function draft(claims: FlowClaim[]): TopicDraft {
-  const markers = claims.map((_, index) => `{{claim:${index}}}`).join("\n");
-  return { summary: "投放规则", claims, pages: [{ pageId: PAGE.pageId, body: `## 当前结论\n${markers}`,
+  const paragraphs = claims.map((item, index) => `${item.text} {{claim:${index}}}`).join("\n");
+  return { summary: "投放规则", claims, pages: [{ pageId: PAGE.pageId, body: `## 当前结论\n${paragraphs}`,
     claimIndexes: claims.map((_, index) => index) }] };
 }
 
 const JOB = { evidence: [USER, ASSISTANT, ARTIFACT], allowedPageIds: [PAGE.pageId] } as FlowJob;
 
-describe("role authority normalization", () => {
-  it("Given an assistant-primary decision, When normalized, Then the page validates as a historical lesson", () => {
-    const original = draft([claim(ASSISTANT)]);
-    expect(() => validatedDraft(original, JOB, [PAGE], 5)).toThrow(/assistant_authority/);
-    const [result] = validatedDraft(withRoleAuthority(original, JOB.evidence), JOB, [PAGE], 5).claims;
-    expect(result).toMatchObject({ kind: "lesson", status: "historical", text: ASSISTANT.text, quote: ASSISTANT.text });
+describe("explicit role authority validation", () => {
+  it("Given an assistant-primary decision, When validated, Then it remains held instead of being downgraded", () => {
+    expect(() => validatedDraft(draft([claim(ASSISTANT)]), JOB, [PAGE], 5)).toThrow(/assistant primary evidence supports only historical lessons/);
   });
 
-  it("Given an artifact-primary decision, When normalized, Then it becomes a historical fact instead of holding the page", () => {
-    const original = draft([claim(ARTIFACT)]);
-    expect(() => validatedDraft(original, JOB, [PAGE], 5)).toThrow(/not evidence of a user decision/);
-    const [result] = validatedDraft(withRoleAuthority(original, JOB.evidence), JOB, [PAGE], 5).claims;
-    expect(result).toMatchObject({ kind: "fact", status: "historical" });
+  it("Given an artifact-primary decision, When validated, Then it remains held instead of being downgraded", () => {
+    expect(() => validatedDraft(draft([claim(ARTIFACT)]), JOB, [PAGE], 5)).toThrow(/artifact evidence supports only historical/);
   });
 
-  it("Given assistant supporting quotes, When normalized, Then only a user-primary claim keeps them", () => {
+  it("Given a user decision supported by the assistant's proposal, When validated, Then both references remain admissible", () => {
     const support = [{ evidenceId: ASSISTANT.id, quote: ASSISTANT.text }];
-    const normalized = withRoleAuthority(draft([claim(USER, { supportingQuotes: support }),
-      claim(ARTIFACT, { kind: "constraint", status: "historical", supportingQuotes: support })]), JOB.evidence);
-    expect(normalized.claims.map(item => item.supportingQuotes?.length)).toEqual([1, 0]);
-    expect(() => validatedDraft(normalized, JOB, [PAGE], 5)).not.toThrow();
+    expect(() => validatedDraft(draft([claim(USER, { supportingQuotes: support })]), JOB, [PAGE], 5)).not.toThrow();
   });
 
-  it("Given a claim the model marked uncertain, When normalized, Then it still holds for review", () => {
-    const original = draft([claim(ASSISTANT, { status: "uncertain" })]);
-    expect(withRoleAuthority(original, JOB.evidence).claims[0]).toEqual(original.claims[0]);
+  it("Given assistant support without a user-primary decision, When validated, Then the evidence conflict is rejected", () => {
+    const support = [{ evidenceId: ASSISTANT.id, quote: ASSISTANT.text }];
+    expect(() => validatedDraft(draft([claim(ARTIFACT, { kind: "fact", status: "historical", supportingQuotes: support })]), JOB, [PAGE], 5))
+      .toThrow(/assistant supporting evidence requires a user-primary claim/);
   });
 });
 

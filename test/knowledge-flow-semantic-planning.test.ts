@@ -16,6 +16,8 @@ import type { LLMProvider } from "../src/utils/provider.js";
 import { buildFrontmatter, parseFrontmatter } from "../src/utils/markdown.js";
 import { sha256Text } from "../src/connectors/hash.js";
 import type { TopicDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
+import { buildCorrectionEvidence } from "../extensions/knowledge-flow/consolidation-quotes.js";
+import { quoteBoundDraftFromCatalog } from "./knowledge-flow-consolidation-fixtures.js";
 
 const sharedPage = "concepts/shared-decision";
 const peerPage = "concepts/peer-guidance";
@@ -73,7 +75,8 @@ function fakeProvider(input: FlowJob, captured: Record<string, any>[]): LLMProvi
     const request = JSON.parse(messages[0].content) as Record<string, any>;
     captured.push({ tool: tools[0].name, system, request });
     if (tools[0].name === "knowledge_topic_plan") return JSON.stringify(plan());
-    if (tools[0].name === "knowledge_topic_edit") return JSON.stringify(draft(input));
+    if (tools[0].name === "knowledge_topic_edit") return JSON.stringify(
+      quoteBoundDraftFromCatalog(draft(input), buildCorrectionEvidence(input.evidence)));
     if (tools[0].name === "knowledge_topic_review") return JSON.stringify({ decision: "accept", reason: "来源范围与证据完整",
       checkedClaimIndexes: [0], checkedPageIds: [sharedPage] });
     throw new Error(`unexpected tool ${tools[0].name}`);

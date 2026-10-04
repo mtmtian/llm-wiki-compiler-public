@@ -7,7 +7,7 @@ import { resolvePlan } from "../extensions/knowledge-flow/consolidation-plan.js"
 import { sha256Text } from "../src/connectors/hash.js";
 import type { FlowConfig } from "../extensions/knowledge-flow/types.js";
 import type { TopicDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
-import { accepted, config, draft, job, original, pageId, plan, topicId } from "./knowledge-flow-consolidation-fixtures.js";
+import { accepted, config, draft, expectNeedsReview, job, original, pageId, plan, topicId } from "./knowledge-flow-consolidation-fixtures.js";
 
 /** Preserve the publication assertion while sharing fixture invocation between correction cases. */
 async function expectSubmittedSession(runtime: FlowConfig) {
@@ -32,6 +32,14 @@ async function submitDraftWithPlan(topicPlan: ReturnType<typeof plan>, changed: 
   review: ReturnType<typeof accepted> & { checkedRetiredCitations?: string[] }) {
   const runtime = config({ knowledge_topic_plan: topicPlan, knowledge_topic_edit: changed, knowledge_topic_review: review });
   return consolidateSession(job(), runtime, new Map([[pageId, original]]));
+}
+
+async function expectInvalidQuoteSelector(changed: TopicDraft, message: RegExp): Promise<void> {
+  let reviews = 0;
+  const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: changed,
+    knowledge_topic_review: () => { reviews += 1; return accepted(); } });
+  await expect(consolidateSession(job(), runtime, new Map([[pageId, original]]))).rejects.toThrow(message);
+  expect(reviews).toBe(0);
 }
 
 describe("whole-session topic consolidation", () => {
@@ -92,8 +100,7 @@ describe("whole-session topic consolidation", () => {
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: draft(),
       knowledge_topic_review: { ...accepted(), decision: "needs_review", reason: "预算单位不明确" } });
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
-    expect(result.status).toBe("needs_review");
-    expect(result.contribution).toBeUndefined();
+    expectNeedsReview(result);
     expect(result.error).toContain("预算单位不明确");
   });
 
@@ -151,7 +158,7 @@ describe("whole-session topic consolidation", () => {
       expect(edit).toContain(clause);
       expect(review).toContain(clause);
     }
-    expect(review).toContain("ENTIRE diff's problems can be fixed solely by changing primary evidence/quote bindings");
+    expect(review).toContain("A top-level reject alone never grants source-change permission");
   });
 
   it("Given a draft deleting historical citations, Then rejects it before publication", async () => {
@@ -181,9 +188,9 @@ describe("whole-session topic consolidation", () => {
     await expectHeldDraft(changed, /not supported by original evidence/);
   });
 
-  it("Given a hallucinated exact quote, Then cannot publish even if a reviewer would approve", async () => {
+  it("Given a hallucinated exact quote, Then the quote-bound schema rejects it before review", async () => {
     const changed = draft(); changed.claims[0].quote = "伪造预算280个虚构单位";
-    await expectHeldDraft(changed, /evidence/);
+    await expectInvalidQuoteSelector(changed, /quoteId must be equal to one of the allowed values/);
   });
 
   it("Given a saved model result, When the process resumes without a provider, Then recovers the same contribution", async () => {
@@ -209,15 +216,15 @@ describe("whole-session topic consolidation", () => {
     expect(result.contribution?.claims[0].supportingQuotes).toEqual([{ evidenceId: "quote-1", quote: "建议将样例预算调整到28个虚构单位。" }]);
   });
 
-  it("Given a session summary alone, Then cannot use it in place of the missing original proposal", async () => {
+  it("Given a session summary alone, Then its quote selector is absent before review", async () => {
     const changed = draft();
     changed.claims[0].supportingQuotes = [{ evidenceId: "summary", quote: "正在讨论样例素材测试预算。" }];
-    await expectHeldDraft(changed, /evidence/);
+    await expectInvalidQuoteSelector(changed, /supportingQuotes\/0\/quoteId must be equal to one of the allowed values/);
   });
 
   it("Given a saved specification labeled as a decision, Then it becomes a historical fact that still requires independent review", async () => {
     const input = job(); input.evidence[0].kind = "artifact";
-    const changed = draft(); changed.claims[0].status = "historical";
+    const changed = draft(); changed.claims[0].kind = "fact"; changed.claims[0].status = "historical";
     let reviews = 0;
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: changed,
       knowledge_topic_review: () => { reviews += 1; return accepted(); } });
@@ -227,7 +234,7 @@ describe("whole-session topic consolidation", () => {
   });
 
   it("Given a correctable draft error, When corrected using the same original evidence, Then still requires whole-page review", async () => {
-    const invalid = draft(); invalid.claims[0].evidenceId = "invented-summary";
+    const invalid = draft(); invalid.claims[0].status = "uncertain";
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (request: { correction?: unknown; evidence?: Array<{ quoteOptions: Array<{ quoteId: string }> }> }) => request.correction
       ? { ...draft(), claims: [{ ...draft().claims[0], quote: undefined, quoteId: request.evidence![0].quoteOptions[0].quoteId }] }
       : invalid,
@@ -238,10 +245,8 @@ describe("whole-session topic consolidation", () => {
     expect(result.contribution?.claims[0].evidenceId).toBe("quote-0");
   });
 
-  it("Given an invalid retirement literal in the first draft, When one correction supplies a single survivor, Then the existing correction path publishes it", async () => {
+  it("Given an unaccounted old citation, When one correction retires it with a valid claim anchor, Then the page receives full review", async () => {
     const invalid = draft(); invalid.pages[0].body = "## 当前结论\n预算调整 {{claim:0}}";
-    invalid.pages[0].citationRetirements = [{ citation: "^[old.md:1]", reason: "旧过程结束",
-      replacement: "{{claim:0}}、{{claim:2}}" }];
     const corrected = structuredClone(invalid);
     corrected.pages[0].citationRetirements = [{ citation: "^[old.md:1]", reason: "旧过程结束", replacement: "{{claim:0}}" }];
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (request: { correction?: unknown }) => request.correction ? corrected : invalid,
@@ -250,11 +255,12 @@ describe("whole-session topic consolidation", () => {
     expect(result.contribution?.topicRevisions?.[0].citationRetirements?.[0].replacement).toBe("{{claim:0}}");
   });
 
-  it("Given an invalid retirement literal in both drafts, When correction repeats it, Then the bounded run holds with the concrete schema failure", async () => {
+  it("Given an unaccounted citation, When the correction invents a malformed retirement anchor, Then it is held by the correction schema", async () => {
     const invalid = draft(); invalid.pages[0].body = "## 当前结论\n预算调整 {{claim:0}}";
-    invalid.pages[0].citationRetirements = [{ citation: "^[old.md:1]", reason: "旧过程结束",
+    const corrected = structuredClone(invalid);
+    corrected.pages[0].citationRetirements = [{ citation: "^[old.md:1]", reason: "旧过程结束",
       replacement: "{{claim:0}}、{{claim:2}}" }];
-    const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (request: { correction?: unknown }) => request.correction ? invalid : invalid,
+    const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (request: { correction?: unknown }) => request.correction ? corrected : invalid,
       knowledge_topic_review: accepted() });
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
     expect(result).toMatchObject({ status: "needs_review", error: expect.stringMatching(/correction evidence selection failed|pattern/) });
@@ -263,37 +269,34 @@ describe("whole-session topic consolidation", () => {
 
   it("Given a correction with a dropped citation, Then it receives the exact unaccounted marker by page", async () => {
     const input = job(); input.evidence[0].kind = "artifact";
-    const invalid = draft(); invalid.claims[0].evidenceId = "missing-evidence";
+    const invalid = draft(); invalid.claims[0].kind = "fact"; invalid.claims[0].status = "historical";
     invalid.pages[0].body = "## 当前结论\n预算28个虚构单位。{{claim:0}}";
-    const corrected = draft(); corrected.claims[0].kind = "fact"; corrected.claims[0].status = "historical";
+    const corrected = structuredClone(invalid);
+    corrected.pages[0].body = "## 当前结论\n预算28个虚构单位。{{claim:0}}\n\n{{keep:P1}}";
     let correction: any;
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (request: any) => {
       if (!request.correction) return invalid;
       correction = request.correction;
       return corrected;
-    }, knowledge_topic_review: accepted() });
+    }, knowledge_topic_review: { ...accepted(), checkedRetiredCitations: [] } });
     const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
     expect(result.status).toBe("submitted");
     expect(correction.unaccountedCitations).toEqual([{ pageId, citations: ["^[old.md:1]"] }]);
   });
 
-  it.each(["assistant", "artifact"] as const)("Given %s primary and assistant support, When authority normalization drops unsupported context, Then no correction is spent and independent review still runs", async (primaryKind) => {
+  it.each(["assistant", "artifact"] as const)("Given a schema-valid %s claim, When the independent review runs, Then its historical authority remains explicit", async (primaryKind) => {
     const input = job(); const primaryText = `${primaryKind} historical evidence`; const supportText = "assistant proposal context";
     input.evidence = [
       { ...input.evidence[0], id: `${primaryKind}-primary`, kind: primaryKind, text: primaryText, sha256: sha256Text(primaryText) },
       { ...input.evidence[0], id: "assistant-support", kind: "assistant", text: supportText, sha256: sha256Text(supportText) },
     ];
     const invalid = draft(); invalid.claims[0] = { ...invalid.claims[0], text: primaryText, evidenceId: `${primaryKind}-primary`, quote: primaryText,
-      kind: primaryKind === "assistant" ? "lesson" : "fact", status: "historical", supportingQuotes: [{ evidenceId: "assistant-support", quote: supportText }] };
-    let corrections = 0; let reviews = 0;
-    const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (request: any) => {
-      if (!request.correction) return invalid;
-      corrections += 1;
-      const option = request.evidence.find((item: any) => item.id === `${primaryKind}-primary`).quoteOptions[0];
-      return { ...invalid, claims: [{ ...invalid.claims[0], quote: undefined, quoteId: option.quoteId, supportingQuotes: [] }] };
-    }, knowledge_topic_review: () => { reviews += 1; return accepted(); } });
+      kind: primaryKind === "assistant" ? "lesson" : "fact", status: "historical", supportingQuotes: [] };
+    let reviews = 0;
+    const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: invalid,
+      knowledge_topic_review: () => { reviews += 1; return accepted(); } });
     const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
-    expect(result.status).toBe("submitted"); expect(corrections).toBe(0); expect(reviews).toBe(1);
+    expect(result.status).toBe("submitted"); expect(reviews).toBe(1);
     expect(result.contribution?.claims[0].kind).toBe(primaryKind === "assistant" ? "lesson" : "fact");
     expect(result.contribution?.claims[0].supportingQuotes ?? []).toEqual([]);
   });

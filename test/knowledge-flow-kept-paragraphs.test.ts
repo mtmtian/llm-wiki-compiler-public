@@ -44,7 +44,7 @@ describe("kept paragraphs", () => {
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_review: accepted(),
       knowledge_topic_edit: (request: any) => {
         if (!request.correction) return drafted(reworded);
-        reason = request.correction.reason;
+        reason = request.correction.diagnostics;
         return drafted(keptHistory);
       } });
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
@@ -57,7 +57,7 @@ describe("kept paragraphs", () => {
     const inline = keptHistory.replace("{{keep:P1}}", "此前预算见 {{keep:P1}}。");
     let reason = "";
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_review: accepted(),
-      knowledge_topic_edit: (request: any) => { reason = request.correction?.reason ?? reason; return drafted(inline); } });
+      knowledge_topic_edit: (request: any) => { reason = request.correction?.diagnostics ?? reason; return drafted(inline); } });
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
     expect(reason).toContain("kept paragraph placeholder {{keep:P1}} was not expanded");
     expect(result.status).toBe("needs_review");
