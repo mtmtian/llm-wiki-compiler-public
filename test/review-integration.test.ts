@@ -144,6 +144,8 @@ describe("review integration tests", () => {
       const result = await runCLI(["compile", "--review"], cwd, {
         ANTHROPIC_API_KEY: "",
         ANTHROPIC_AUTH_TOKEN: "",
+        // Sever the ~/.claude/settings.json fallback so a token configured there cannot satisfy the guard.
+        LLMWIKI_CLAUDE_SETTINGS_PATH: "/path/does/not/exist.json",
       });
       expectCLIFailure(result);
       expect(result.stderr).toContain("Error:");

@@ -255,6 +255,8 @@ runtime 遇 version 2 会拒绝本次 sync 并保留旧视图，不应继续承�
 每个 merge 指定存活页（必须是 `previousPages` 之一）、被吸收的修订记录 `absorbedRecordIds`、
 受审正文、`mergedAt` 与理由。副本先重放被吸收的记录，核对每个旧页字节与 `sha256` 一致后
 写入合并页、删除其余旧页并改写链接，再应用之后的记录；之后仍修订已删除旧页的记录待审。
+migration 生成的页面可以作为存活页或被并入（每次重放 migration 都先于 merges）；
+migration 已并掉或退役的旧页不能出现在 merge 中。
 同样先在冻结库副本验证，所有机器升级到支持 version 3 的 runtime 后再激活。
 
 已经有 ownership manifest 的共享库用普通 sync 迁移，无需再次运行旧文件认领。

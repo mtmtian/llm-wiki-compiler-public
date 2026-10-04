@@ -6,14 +6,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { consolidateSession } from "../extensions/knowledge-flow/consolidate.js";
 import { validatedDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
-import { resolvePlan } from "../extensions/knowledge-flow/consolidation-plan.js";
+import { MAX_TOPIC_BODY_CHARS, resolvePlan } from "../extensions/knowledge-flow/consolidation-plan.js";
 import type { TopicPlan } from "../extensions/knowledge-flow/consolidation-plan.js";
 import { processJob } from "../extensions/knowledge-flow/pipeline.js";
 import { materializeRecords } from "../extensions/knowledge-flow/materialize.js";
 import type { PublicationRecord } from "../extensions/knowledge-flow/publication-types.js";
 import type { FlowConfig, FlowJob } from "../extensions/knowledge-flow/types.js";
 import type { LLMProvider } from "../src/utils/provider.js";
-import { buildFrontmatter } from "../src/utils/markdown.js";
+import { buildFrontmatter, parseFrontmatter } from "../src/utils/markdown.js";
 import { sha256Text } from "../src/connectors/hash.js";
 import type { TopicDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
 
@@ -281,6 +281,23 @@ describe("semantic topic planning", () => {
     expect(review.catalog).toHaveLength(2);
     expect(review.catalog[0].sourceProjectIds).toContain("alpha");
     expect(captured.find(item => item.tool === "knowledge_topic_plan")!.system).toContain("applicability");
+  });
+
+  it("Given workstream pages, When planning and review run, Then both see each page's body size against the editable limit", async () => {
+    const input = revisionJob("semantic");
+    const runtime = config();
+    const captured: Record<string, any>[] = [];
+    runtime.provider = fakeProvider(input, captured);
+    runtime.reviewer = runtime.provider;
+    await consolidateSession(input, runtime, new Map([[sharedPage, sharedOriginal], [peerPage, peerOriginal]]));
+    const planning = captured.find(item => item.tool === "knowledge_topic_plan")!;
+    const review = captured.find(item => item.tool === "knowledge_topic_review")!;
+    expect(planning.request.catalog.map((page: any) => page.bodyChars)).toEqual([sharedOriginal, peerOriginal]
+      .map(text => parseFrontmatter(text).body.length));
+    expect(review.request.catalog[0].bodyChars).toBe(parseFrontmatter(sharedOriginal).body.length);
+    expect(planning.system).toContain("Organize pages by workstream");
+    expect(planning.system).toContain(`near ${MAX_TOPIC_BODY_CHARS}`);
+    expect(review.system).toContain(`near ${MAX_TOPIC_BODY_CHARS}`);
   });
 
   it("Given a semantic job, When a host supplies legacy extraction dependencies, Then refuses that alternate pipeline", async () => {
