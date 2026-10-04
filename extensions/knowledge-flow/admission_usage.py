@@ -35,6 +35,28 @@ def source_hash(job: dict[str, Any]) -> str:
     return digest(json.dumps(frozen, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
 
 
+def capacity_snapshot_hash(job: dict[str, Any]) -> str:
+    """Bind a capacity wait to its full input, including its original queue name."""
+    return digest(json.dumps(job, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+
+
+def capacity_wait_snapshot(path: Path, value: Any) -> tuple[dict[str, Any], str] | None:
+    """Validate one complete wait before either counting a transfer or restoring it."""
+    if not isinstance(value, dict) or value.get("kind") != "capacity":
+        return None
+    identifier, job = value.get("id"), value.get("job")
+    if (identifier != path.stem or not isinstance(job, dict) or job.get("id") != identifier
+            or not isinstance(job.get("evidence"), list)):
+        return None
+    bound_name = job.get("queueFile", identifier + ".json")
+    name = value.get("queueFile", bound_name)
+    if (not isinstance(name, str) or name != bound_name or Path(name).name != name
+            or Path(name).suffix != ".json" or "\\" in name
+            or value.get("jobHash") != capacity_snapshot_hash(job)):
+        return None
+    return job, name
+
+
 def _load_queue(state: Path) -> tuple[list[Path], dict[str, dict[str, Any] | None]]:
     """Read each queue filename once; unreadable files still occupy runnable capacity."""
     paths = sorted((state / "queue").glob("*.json"))
@@ -105,21 +127,16 @@ def _capacity_pending_count(state: Path, queue: dict[str, dict[str, Any] | None]
                 continue
             count += 1
             continue
-        job = value.get("job")
-        identifier = value.get("id")
-        name = value.get("queueFile") or (str(identifier) + ".json")
+        snapshot = capacity_wait_snapshot(path, value)
+        if snapshot is None:
+            count += 1
+            continue
+        job, name = snapshot
         queued = queue.get(name)
-        if (identifier == path.stem and isinstance(job, dict) and job.get("id") == path.stem
-                and value.get("jobHash") == _job_hash(job) and isinstance(queued, dict)
-                and source_hash(queued) == source_hash(job)):
+        if isinstance(queued, dict) and source_hash(queued) == source_hash(job):
             continue
         count += 1
     return count
-
-
-def _job_hash(job: dict[str, Any]) -> str:
-    """Match capture_retry's exact snapshot digest without importing its writer."""
-    return digest(json.dumps(job, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
 
 
 def admission_usage(state: Path) -> dict[str, Any]:

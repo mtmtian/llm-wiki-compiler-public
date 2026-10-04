@@ -272,6 +272,50 @@ class CapacityLifecycleTests(unittest.TestCase):
         self.assertFalse((self.state / "queue/source.json").exists())
         self.assertFalse((self.state / "failed/source.json").exists())
 
+    def test_invalid_capacity_queue_filename_remains_pending_and_counted(self):
+        """Malformed or unbound destination metadata never escapes or bypasses intake."""
+        self.config["maxQueuedJobs"] = 1
+        blocker = self.state / "queue/blocker.json"
+        save_json(blocker, self.job("blocker", project="q"))
+        enqueue_job(self.job("source"), self.state / "queue/source.json", self.config)
+        pending_path = self.state / "capture-pending/source.json"
+        pending = load_json(pending_path)
+        blocker.unlink()
+        due = dt.datetime.fromisoformat(pending["nextAttemptAt"]) + dt.timedelta(seconds=1)
+        invalid_names = ["../orphan/source.json", str(self.root / "outside.json"),
+                         "nested/source.json", "unrelated.json", "source.txt", "", None,
+                         [], ["source.json"], {}, {"path": "source.json"}]
+        for name in invalid_names:
+            with self.subTest(queue_file=name):
+                save_json(pending_path, {**pending, "queueFile": name})
+                before = pending_path.read_bytes()
+                self.assertEqual(admission_usage(self.state)["waiting"], 1)
+                result = process_capture_retries(self.config, due)
+                self.assertEqual((result["recovered"], result["invalid"]), (0, 1))
+                self.assertEqual(load_json(self.state / "capture-errors/source.json")["type"],
+                                 "CapacitySnapshotInvalid")
+                self.assertEqual(pending_path.read_bytes(), before)
+                self.assertEqual(list((self.state / "queue").glob("*.json")), [])
+                self.assertFalse((self.state / "orphan/source.json").exists())
+                self.assertFalse((self.root / "outside.json").exists())
+
+    def test_parked_legacy_filename_is_bound_to_the_frozen_source(self):
+        """An existing safe queue name survives parking without becoming mutable metadata."""
+        queued = self.state / "queue/legacy-source.json"
+        save_json(queued, self.job("source"))
+        hold = self.state / "review/p-held.json"
+        save_json(hold, {"jobId": "p-held", "projectId": "p"})
+        process_queue(self.config, lambda *_args: self.fail("blocked source invoked"),
+                      clock=lambda: self.now)
+        pending = load_json(self.state / "capture-pending/source.json")
+        self.assertEqual(pending["job"]["queueFile"], queued.name)
+        self.assertEqual(pending["queueFile"], queued.name)
+        hold.unlink()
+        due = dt.datetime.fromisoformat(pending["nextAttemptAt"]) + dt.timedelta(seconds=1)
+        self.assertEqual(process_capture_retries(self.config, due)["recovered"], 1)
+        self.assertEqual(load_json(queued)["id"], "source")
+        self.assertFalse((self.state / "capture-pending/source.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
