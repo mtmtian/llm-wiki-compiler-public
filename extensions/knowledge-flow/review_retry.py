@@ -67,12 +67,19 @@ def _read_source(state, identifier):
             "batchHash": digest(batch_text)}
 
 
-def _retry_job(source, identifier, created):
-    """Copy evidence exactly, with new model identity and no stale scheduling or basis."""
+def _retry_job(config, source, identifier, created):
+    """Copy evidence exactly, with new model identity and no stale scheduling or basis.
+
+    The topic scope is routing, not evidence: like new intake, the retry takes the scope active
+    today, so a hold from before semantic topics can still update a semantic page.
+    """
     job = copy.deepcopy(source["batch"]["job"])
     for key in ("sourceJobIds", "sourceQueueFiles", "queueFile", "batchCreatedAt", "sessionSchedule",
-                "basisRecordIds", "notBefore", "nextAttemptAt", "attempts", "reviewRetryOf", "reviewRetryHash"):
+                "basisRecordIds", "notBefore", "nextAttemptAt", "attempts", "reviewRetryOf", "reviewRetryHash",
+                "topicScope"):
         job.pop(key, None)
+    if config.get("topicScope") == "semantic":
+        job["topicScope"] = "semantic"
     job.update(id="review-" + digest(identifier + source["reviewHash"] + source["batchHash"])[:48],
                reviewRetryOf=identifier, reviewRetryHash=source["reviewHash"],
                createdAt=created, notBefore=created)
@@ -81,7 +88,7 @@ def _retry_job(source, identifier, created):
 
 def _stage_retry(config, state, identifier, source, created, dry_run):
     """Freeze a new request before enqueue; a repeated request reuses it verbatim."""
-    job = _retry_job(source, identifier, created)
+    job = _retry_job(config, source, identifier, created)
     base_id, attempt = job["id"], 1
     while (state / "failed" / (job["id"] + ".json")).exists():
         attempt += 1

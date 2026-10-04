@@ -63,6 +63,22 @@ class ReviewRetryTests(unittest.TestCase):
         self.assertNotIn("basisRecordIds", queued)
         self.assertEqual((self.state / "batches/batch-old.json").read_bytes(), frozen)
 
+    def test_hold_from_before_semantic_topics_is_retried_in_todays_scope(self):
+        """Given a legacy hold and active semantic topics, the retry is a semantic job like new intake."""
+        self.config.update(topicScope="semantic", exchange={"protocolVersion": 2})
+        self.retry()
+        queued = load_json(next((self.state / "queue").glob("*.json")))
+        self.assertEqual(queued["topicScope"], "semantic")
+        self.assertEqual(queued["evidence"], self.job["evidence"])
+
+    def test_retry_drops_a_scope_that_is_no_longer_active(self):
+        """Given a semantic hold after semantic topics are off, the retry takes today's project scope."""
+        batch = load_json(self.state / "batches/batch-old.json")
+        batch["job"]["topicScope"] = "semantic"
+        save_json(self.state / "batches/batch-old.json", batch)
+        self.retry()
+        self.assertNotIn("topicScope", load_json(next((self.state / "queue").glob("*.json"))))
+
     def test_success_retires_review_after_finalization_without_regressing_session(self):
         """A normally reviewed empty result clears the hold without recommitting old turns."""
         queued = self.retry()
