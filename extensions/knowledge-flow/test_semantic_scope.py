@@ -9,7 +9,7 @@ from pathlib import Path
 
 from common import config_from, page_ids, save_json
 from semantic_scope import CAPABILITY, activate, readiness, require_ready, require_publication
-from hooks import _prepare_session_job
+from hooks import prepare_session_job
 from queue_worker import _batch_key, _merge_batch
 
 
@@ -107,11 +107,11 @@ class SemanticScopeTests(unittest.TestCase):
         cfg = {**self.config, "topicScope": "semantic", "sessionConsolidation": {"enabled": True}}
         job = {"id": "new", "projectId": "alpha", "sessionId": "s"}
         queued = self.root / "queue.json"
-        _prepare_session_job(job, queued, cfg)
+        prepare_session_job(job, queued, cfg)
         self.assertEqual(job["topicScope"], "semantic")
         save_json(queued, {})
         legacy = {"id": "old", "projectId": "alpha", "sessionId": "s"}
-        _prepare_session_job(legacy, queued, cfg)
+        prepare_session_job(legacy, queued, cfg)
         self.assertNotIn("topicScope", legacy)
 
     def test_semantic_publication_requires_job_contract_and_shared_activation(self):

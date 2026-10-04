@@ -295,6 +295,19 @@ Wiki 副本重新规划；原批次、固定 basis 和模型缓存保持原状�
 同样可以用 `--retry-review` 重处理。它不会腾出待审名额，所以只在该项目待审未满时才能加入队列；
 若处理时再次因待审已满被拒，原记录保持不变，可在有空位后再试。
 
+`failed/` 中的回合（worker 三次失败，或采集时超过任务字节上限）不会自动重放。原因修复后，
+可逐个先检查再重新入队：
+
+```sh
+llmwiki-maintain --requeue-failed JOB_ID --dry-run
+llmwiki-maintain --requeue-failed JOB_ID
+```
+
+重新入队以新的作业身份复制原回合的证据，按普通入队流程附加当前会话上下文、核对字节上限、
+判断是否有实质内容并按会话调度等待；原失败批次的审计保持不变。仍然超限的回合原样留在
+`failed/`。入队或判为无实质内容后，原失败记录和它的采集错误合并移入 `resolved/`，
+同一回合不能重复入队。审核重试的作业仍走 `--retry-review`。
+
 ## MCP 与维护调度
 
 Claude Code 与 Pi 使用[可插拔 Agent 接入](AGENT-PLUGINS.md)：同一安装器登记原生事件和共享 MCP launcher，

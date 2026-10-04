@@ -135,7 +135,8 @@ def _parser():
     parser.add_argument("--initialize-baseline", action="store_true", help="freeze the original shared Wiki once for v2")
     parser.add_argument("--resolve", metavar="JOB_ID")
     parser.add_argument("--retry-review", metavar="JOB_ID", help="reprocess a held session with its original evidence")
-    parser.add_argument("--dry-run", action="store_true", help="inspect --retry-review without enqueueing")
+    parser.add_argument("--requeue-failed", metavar="JOB_ID", help="requeue a failed turn as a new job through normal intake")
+    parser.add_argument("--dry-run", action="store_true", help="inspect --retry-review or --requeue-failed without enqueueing")
     parser.add_argument("--action", choices=("reject", "dismiss"))
     writer = parser.add_mutually_exclusive_group()
     writer.add_argument('--shared-writer-status', action='store_true')
@@ -145,18 +146,35 @@ def _parser():
     return parser
 
 
+# Operations that a single explicit retry or requeue must not be combined with.
+SOLE_OPERATION_FLAGS = ("drain", "resolve", "initialize_baseline", "apply", "announce", "check", "action",
+                        "shared_writer_status", "request_shared_write", "bootstrap_shared_writer",
+                        "semantic_topics", "knowledge_ledger")
+
+
+def _run_explicit_job(parser, args, config):
+    """Run one explicit held-review retry or failed-turn requeue; each stands alone."""
+    flag = "--retry-review" if args.retry_review else "--requeue-failed"
+    if (args.retry_review and args.requeue_failed) or any(getattr(args, name) for name in SOLE_OPERATION_FLAGS):
+        parser.error(f"{flag} cannot be combined with other operations")
+    if args.retry_review:
+        from review_retry import retry_review
+        result = retry_review(config, args.retry_review, dry_run=args.dry_run)
+    else:
+        from failed_requeue import requeue_failed
+        result = requeue_failed(config, args.requeue_failed, dry_run=args.dry_run)
+    print(json.dumps(result))
+
+
 def main():
     """Only explicit maintenance invocations can drain or evaluate the queue."""
     parser = _parser()
     args = parser.parse_args()
     config = config_from(args.config)
-    if args.dry_run and not args.retry_review:
-        parser.error('--dry-run requires --retry-review')
-    if args.retry_review:
-        if args.drain or args.resolve or args.initialize_baseline or args.apply or args.announce or args.check or args.action or args.shared_writer_status or args.request_shared_write or args.bootstrap_shared_writer or args.semantic_topics or args.knowledge_ledger:
-            parser.error('--retry-review cannot be combined with other operations')
-        from review_retry import retry_review
-        print(json.dumps(retry_review(config, args.retry_review, dry_run=args.dry_run)))
+    if args.dry_run and not (args.retry_review or args.requeue_failed):
+        parser.error('--dry-run requires --retry-review or --requeue-failed')
+    if args.retry_review or args.requeue_failed:
+        _run_explicit_job(parser, args, config)
         return
     if _gate_command(parser, args, config) or _writer_command(parser, args, config):
         return
