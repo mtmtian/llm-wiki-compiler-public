@@ -47,6 +47,13 @@ remain active. Original batch audits retain evidence beyond the 40,000-byte
 checkpoint window, without putting whole transcripts into the shared exchange. The window
 is measured like the job byte limit (UTF-8 JSON), so prior evidence alone never fills a job.
 
+Planning organizes pages by workstream: one page per product or repository and area of recurring
+work, such as its reporting rules, attribution data or release pipeline. Another decision object of
+the same workstream becomes a section of that page. A new page needs a workstream no page covers,
+or a sub-workstream once a page nears the editable body limit (`MAX_TOPIC_BODY_CHARS`, 12,000
+characters), and its reason names the closest existing page. The planning and review catalogs carry
+each page's `bodyChars` for that judgement, and review rejects a page that should have been a section.
+
 Each model stage has a durable input-bound result. Finalization advances the
 checkpoint once, after publication export succeeds. New messages arriving during
 processing belong to the next batch. Existing frozen jobs and legacy submissions

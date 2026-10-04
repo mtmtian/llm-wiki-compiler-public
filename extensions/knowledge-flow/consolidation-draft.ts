@@ -2,6 +2,7 @@
 import { sha256Text } from "../../src/connectors/hash.js";
 import { diagnoseClaims, formatClaimDiagnostics } from "./extract.js";
 import type { FlowClaim, FlowEvidence, FlowJob } from "./types.js";
+import { MAX_TOPIC_BODY_CHARS } from "./consolidation-plan.js";
 import type { PlannedPage } from "./consolidation-plan.js";
 import type { TopicRevision } from "./topic-revision-types.js";
 import { validateCitationChanges, validateRetirementReferences } from "./citation-retirement.js";
@@ -132,7 +133,7 @@ export function validatedDraft(draft: TopicDraft, job: FlowJob, pages: PlannedPa
 }
 
 function validateEdit(edit: TopicDraft["pages"][number], page: PlannedPage, claims: FlowClaim[], seen: Set<number>): void {
-  if (!edit.claimIndexes.length || edit.body.trimStart().startsWith("---") || edit.body.length > 12000) throw new Error("invalid topic body");
+  if (!edit.claimIndexes.length || edit.body.trimStart().startsWith("---") || edit.body.length > MAX_TOPIC_BODY_CHARS) throw new Error("invalid topic body");
   for (const index of edit.claimIndexes) {
     const claim = claims[index];
     if (seen.has(index) || !belongsToPage(claim, page)) throw new Error("claim topic ownership mismatch");
