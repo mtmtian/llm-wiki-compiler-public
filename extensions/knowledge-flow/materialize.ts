@@ -218,7 +218,12 @@ async function promoteTopics(root: string, legacy: LegacyProjection): Promise<vo
 async function promoteMigration(config: FlowConfig, legacy: LegacyProjection): Promise<void> {
   const root = config.wikiRoot;
   if (!legacy.migration.applied) return;
-  for (const page of legacy.migrationPages) await promoteMigrationPage(root, page.pageId, legacy.desired.get(page.pageId)!);
+  // desired already holds the replayed result: a reviewed topic merge may have removed a migration page,
+  // which promoteMerges then deletes.
+  for (const page of legacy.migrationPages) {
+    const body = legacy.desired.get(page.pageId);
+    if (body !== undefined) await promoteMigrationPage(root, page.pageId, body);
+  }
   await removeMigratedPages(root, [...legacy.migrationPages.flatMap(page => page.previousPages.filter(item => item.pageId !== page.pageId)),
     ...(config.topicMigration?.retiredPages ?? [])]);
 }

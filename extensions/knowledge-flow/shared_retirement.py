@@ -25,10 +25,14 @@ def retired_baseline(value: Any, baseline: dict[str, bytes]) -> set[str]:
 def desired_retirement(config: dict[str, Any], baseline: dict[str, bytes], projection: dict[str, bytes]) -> set[str]:
     """Only baseline pages removed by the validated migration or a reviewed merge receive tombstones."""
     migration = config.get("topicMigration") or {}
-    pages = [*migration.get("pages", []), *(config.get("topicMerges") or [])]
+    merges = config.get("topicMerges") or []
+    pages = [*migration.get("pages", []), *merges]
     if not pages and not migration.get("retiredPages"):
         return set()
-    destinations = {"wiki/" + page["pageId"] + ".md" for page in pages}
+    # A merge may remove a migration target, which then stops being a destination.
+    merged_away = {"wiki/" + prior["pageId"] + ".md" for merge in merges
+                   for prior in merge["previousPages"] if prior["pageId"] != merge["pageId"]}
+    destinations = {"wiki/" + page["pageId"] + ".md" for page in pages} - merged_away
     old = {"wiki/" + prior["pageId"] + ".md" for page in pages for prior in page["previousPages"]}
     old.update("wiki/" + page["pageId"] + ".md" for page in migration.get("retiredPages", []))
     retired = retired_baseline(sorted((old - destinations) & set(baseline)), baseline)

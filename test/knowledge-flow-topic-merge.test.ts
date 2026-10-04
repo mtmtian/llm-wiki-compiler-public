@@ -4,7 +4,7 @@
  * replaces them with the reviewed body, and later records apply to the merged page. A removed page must
  * never be recreated, and any drift from the reviewed bytes or a dropped citation fails closed.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sha256Text } from "../src/connectors/hash.js";
@@ -108,5 +108,52 @@ describe("reviewed merges of revision-layer pages", () => {
     const dropped = await reviewedMerge();
     dropped.body = dropped.body.replace(/样例乙的结论 \^\[[^\]]+\]/, "样例乙的结论");
     await expect(materialize([alpha, beta, gamma], [dropped])).rejects.toThrow(/citation/i);
+  });
+});
+
+const LEGACY = "concepts/sample-legacy";
+const MIGRATED = "concepts/sample-release";
+const legacyBody = "---\ntitle: 旧页\nprojectId: project-a\nsources:\n  - legacy.md\n---\n\n## 历史\n\n旧的样例决定 ^[legacy.md:1]\n";
+/** The one-time legacy migration renders MIGRATED from a baseline page before revisions replay and merges apply. */
+const migration = { version: 1 as const, basisRecordIds: [], pages: [{ projectId: "project-a", projectLabel: "Project A", pageId: MIGRATED,
+  topicId: stableTopicId("project-a", "样例发布", "小批量发布"), title: "样例发布", topic: "样例发布", decisionObject: "小批量发布",
+  body: "## 发布\n\n旧的样例决定 ^[legacy.md:1]", previousPages: [{ pageId: LEGACY, sha256: sha256Text(legacyBody) }] }] };
+
+async function materializeMigrated(merges?: TopicMerge[]) {
+  const config = { ...await makeKnowledgeFlowConfig("wiki-merge-migration-"), topicMigration: migration, ...(merges ? { topicMerges: merges } : {}) };
+  await writeFile(path.join(config.wikiRoot, "wiki", `${LEGACY}.md`), legacyBody);
+  const result = await materializeRecords(config, [alpha]);
+  const read = (pageId: string) => readFile(path.join(config.wikiRoot, "wiki", `${pageId}.md`), "utf8").catch(() => null);
+  return { result, read };
+}
+
+/** Review the migration page and the revision page as they are now, merged into `survivor`. */
+async function migratedMerge(survivor: string): Promise<TopicMerge> {
+  const { read } = await materializeMigrated();
+  const [alphaPage, migratedPage] = [(await read(ALPHA))!, (await read(MIGRATED))!];
+  return { pageId: survivor, title: "甲与发布合并", topic: "样例发布", decisionObject: "小批量发布",
+    body: `${parseFrontmatter(alphaPage).body.trim()}\n\n${parseFrontmatter(migratedPage).body.trim()}`,
+    previousPages: [{ pageId: ALPHA, sha256: sha256Text(alphaPage) }, { pageId: MIGRATED, sha256: sha256Text(migratedPage) }],
+    absorbedRecordIds: [alpha.id], mergedAt: "2026-10-04T00:00:00Z", reason: "同属一个样例工作流" };
+}
+
+describe("reviewed merges that include a page of the legacy migration", () => {
+  it("Given a migration page merged into a revision page, When replayed, Then only the survivor remains and holds both", async () => {
+    const merge = await migratedMerge(ALPHA);
+    const { result, read } = await materializeMigrated([merge]);
+    expect(result.conflicts).toEqual([]);
+    expect(await read(MIGRATED)).toBeNull(); expect(await read(LEGACY)).toBeNull();
+    expect(await read(ALPHA)).toContain("旧的样例决定 ^[legacy.md:1]");
+    expect(await read(ALPHA)).toContain("样例甲的结论");
+  });
+
+  it("Given a revision page merged into the migration page, When replayed twice, Then the migration page is the stable survivor", async () => {
+    const merge = await migratedMerge(MIGRATED);
+    const first = await materializeMigrated([merge]);
+    const second = await materializeMigrated([merge]);
+    expect(first.result.conflicts).toEqual([]);
+    expect(await first.read(ALPHA)).toBeNull();
+    expect(parseFrontmatter((await first.read(MIGRATED))!).meta.knowledgeMergedPages).toEqual([ALPHA, MIGRATED]);
+    expect(await second.read(MIGRATED)).toBe(await first.read(MIGRATED));
   });
 });
