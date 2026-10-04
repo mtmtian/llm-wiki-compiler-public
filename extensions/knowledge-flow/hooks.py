@@ -285,7 +285,7 @@ def stop_event(event, config):
     return result
 
 
-def _prepare_session_job(job, queued, config):
+def prepare_session_job(job, queued, config):
     """Attach prior context before size validation without advancing its cursor."""
     if queued.exists() or not session_enabled(config, job):
         return
@@ -328,7 +328,7 @@ def enqueue_job(job, queued, config, pending_source=None):
     state = Path(config["stateDir"])
     identifier = queued.stem
     max_bytes = max(1000, int(config.get("maxJobBytes", MAX_JOB_BYTES)))
-    _prepare_session_job(job, queued, config)
+    prepare_session_job(job, queued, config)
     size = job_bytes(job)
     if size > max_bytes:
         _record_oversize(state, identifier, queued, job, size, max_bytes)
