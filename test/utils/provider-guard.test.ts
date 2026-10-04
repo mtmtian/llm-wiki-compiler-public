@@ -27,6 +27,8 @@ describe("ensureProviderAvailable error taxonomy", () => {
   it("throws ProviderUnavailableError with structured fields when creds missing", () => {
     process.env.LLMWIKI_PROVIDER = "anthropic";
     delete process.env.ANTHROPIC_API_KEY; delete process.env.ANTHROPIC_AUTH_TOKEN;
+    // Sever the ~/.claude/settings.json fallback so a token configured there cannot satisfy the guard.
+    process.env.LLMWIKI_CLAUDE_SETTINGS_PATH = "/path/does/not/exist.json";
     const err = assertUnavailableError(catchGuardError(), "anthropic");
     expect(err.missing).toContain("ANTHROPIC_API_KEY");
     expect(err.missing.length).toBeGreaterThan(0);
