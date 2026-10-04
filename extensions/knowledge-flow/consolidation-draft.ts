@@ -9,6 +9,7 @@ import { validateCitationChanges, validateRetirementReferences } from "./citatio
 import type { CitationRetirement } from "./citation-retirement.js";
 import { resolveQuote } from "./consolidation-quotes.js";
 import type { CorrectionEvidence } from "./consolidation-quotes.js";
+import { unexpandedPlaceholder } from "./kept-paragraphs.js";
 
 export interface TopicDraft {
   claims: FlowClaim[];
@@ -150,6 +151,11 @@ function belongsToPage(claim: FlowClaim | undefined, page: PlannedPage): boolean
 function validateCitationMarkers(edit: TopicDraft["pages"][number], original: string | null | undefined): void {
   for (const match of edit.body.matchAll(/\{\{claim:([^}]+)\}\}/g)) {
     if (!/^\d+$/.test(match[1]) || !edit.claimIndexes.includes(Number(match[1]))) throw new Error("unknown claim citation");
+  }
+  const placeholder = unexpandedPlaceholder(edit.body);
+  if (placeholder) {
+    throw new Error(`kept paragraph placeholder ${placeholder} was not expanded: write each keep placeholder alone on its own line, `
+      + "and only in the body of the existing page that lists it");
   }
   validateCitationChanges([original ?? ""], edit.body, edit.citationRetirements, { claimIndexes: edit.claimIndexes });
 }
