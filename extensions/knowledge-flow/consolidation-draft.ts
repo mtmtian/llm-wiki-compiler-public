@@ -1,5 +1,6 @@
 /** Validate whole-topic edits against frozen destinations and exact source evidence before independent review. */
 import { sha256Text } from "../../src/connectors/hash.js";
+import { parseFrontmatter } from "../../src/utils/markdown.js";
 import { diagnoseClaims, formatClaimDiagnostics } from "./extract.js";
 import type { FlowClaim, FlowEvidence, FlowJob } from "./types.js";
 import { MAX_TOPIC_BODY_CHARS } from "./consolidation-plan.js";
@@ -96,6 +97,23 @@ function kindFor(claim: FlowClaim, primary: FlowEvidence["kind"]): FlowClaim {
 function supportFor(claim: FlowClaim, primary: FlowEvidence["kind"], roles: ReadonlyMap<string, FlowEvidence["kind"]>): FlowClaim {
   if (primary === "user" || !claim.supportingQuotes) return claim;
   return { ...claim, supportingQuotes: claim.supportingQuotes.filter(item => roles.get(item.evidenceId) !== "assistant") };
+}
+
+/** Only complete, unchanged existing pages may enter independent no-change review. Nothing is published. */
+export function unchangedRevisions(draft: TopicDraft, pages: readonly PlannedPage[]): TopicRevision[] | undefined {
+  if (draft.claims.length || !pages.length || draft.pages.length !== pages.length) return undefined;
+  if (new Set(draft.pages.map(edit => edit.pageId)).size !== pages.length) return undefined;
+  const revisions: TopicRevision[] = [];
+  for (const edit of draft.pages) {
+    const page = pages.find(item => item.pageId === edit.pageId);
+    if (!page || page.original === null || edit.claimIndexes.length || edit.citationRetirements?.length) return undefined;
+    const { meta, body } = parseFrontmatter(page.original);
+    if (edit.body.trim() !== body.trim() || page.title !== meta.title
+      || page.topic !== meta.knowledgeTopic || page.decisionObject !== meta.knowledgeDecisionObject) return undefined;
+    const { original: _original, ...identity } = page;
+    revisions.push({ ...identity, body: edit.body, claimIndexes: [] });
+  }
+  return revisions;
 }
 
 /** Every proposed claim belongs to exactly one planned whole-page edit. */

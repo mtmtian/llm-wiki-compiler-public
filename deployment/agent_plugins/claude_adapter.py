@@ -18,6 +18,8 @@ from claude_capture import IncompleteTranscript, evidence
 
 # Capture failures raise fixed kebab-case codes; anything else is reduced to its type name.
 REASON_CODE = re.compile(r"[a-z]+(?:-[a-z]+)*")
+MAX_FLUSH_WAIT_SECONDS = 2.0
+FLUSH_POLL_INTERVAL_SECONDS = 0.05
 
 
 def project_roots(config: dict[str, Any]) -> frozenset[Path]:
@@ -27,17 +29,35 @@ def project_roots(config: dict[str, Any]) -> frozenset[Path]:
                      if isinstance(path, str) and Path(path).is_absolute())
 
 
-def capture_after_flush(event: dict[str, Any], profile: Path, roots: frozenset[Path]) -> list[dict[str, Any]]:
-    """Retry only bounded transcript flush races; never fall back to history."""
-    for delay in (0, 0.05, 0.1, 0.2, 0.4, 0.8):
-        if delay:
-            time.sleep(delay)
-        try:
-            return evidence(event, profile, roots)
-        except (IncompleteTranscript, FileNotFoundError):
-            if delay == 0.8:
-                raise
-    raise IncompleteTranscript("transcript-unavailable")
+def transcript_size(event: dict[str, Any]) -> int | None:
+    """Return the current transcript size, or None while the file is absent."""
+    try:
+        return Path(event["transcript_path"]).stat().st_size
+    except FileNotFoundError:
+        return None
+
+
+def capture_after_flush(event: dict[str, Any], profile: Path, roots: frozenset[Path],
+                        clock=None, sleeper=None) -> list[dict[str, Any]]:
+    """Retry incomplete reads only after file growth, within Claude's hook budget."""
+    now = clock or time.monotonic
+    wait = sleeper or time.sleep
+    deadline = now() + MAX_FLUSH_WAIT_SECONDS
+    previous_size = object()
+    last_error: Exception = IncompleteTranscript("transcript-unavailable")
+    while True:
+        size = transcript_size(event)
+        if size != previous_size:
+            try:
+                return evidence(event, profile, roots)
+            except (IncompleteTranscript, FileNotFoundError) as error:
+                last_error = (IncompleteTranscript("transcript-unavailable")
+                              if isinstance(error, FileNotFoundError) else error)
+            previous_size = size
+        remaining = deadline - now()
+        if remaining <= 0:
+            raise last_error
+        wait(min(FLUSH_POLL_INTERVAL_SECONDS, remaining))
 
 
 def normalize(event: dict[str, Any], profile: Path, common: Any) -> dict[str, Any]:

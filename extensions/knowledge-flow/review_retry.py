@@ -53,6 +53,10 @@ def _read_source(state, identifier):
     batch_text = (state / "batches" / (identifier + ".json")).read_text()
     batch = json.loads(batch_text)
     anchor_text, anchor = _read_anchor(state, identifier, batch)
+    resolved = load_json(state / "resolved" / (identifier + ".json"), {})
+    if (anchor == "audit" and isinstance(resolved, dict)
+            and resolved.get("anchor") == "audit" and resolved.get("action") in ("dismiss", "dismissed")):
+        raise ValueError("dismissed queue-full hold cannot be retried")
     hold = json.loads(anchor_text)
     job = batch.get("job", {})
     if (hold.get("jobId") != identifier or batch.get("batchId") != identifier

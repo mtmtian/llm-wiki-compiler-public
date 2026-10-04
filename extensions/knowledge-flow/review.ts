@@ -10,6 +10,7 @@ import { DURABLE_KNOWLEDGE_POLICY } from "../../src/compiler/knowledge-policy.js
 import type { LLMProvider, LLMTool } from "../../src/utils/provider.js";
 import { MAX_PROPOSALS } from "./types.js";
 import type { FlowClaim, FlowEvidence, FlowJob, FlowReviewDecision } from "./types.js";
+import { EVIDENCE_SUPPORT_RULES } from "./consolidation-prompts.js";
 
 const REVIEW_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -51,14 +52,14 @@ function reviewTool(): LLMTool {
 }
 
 function reviewSystem(): string {
-  return DURABLE_KNOWLEDGE_POLICY + "\n\nIndependently audit each claim against its cited original evidence. Existing pages are context, not evidence. " +
+  return DURABLE_KNOWLEDGE_POLICY + EVIDENCE_SUPPORT_RULES + "\n\nIndependently audit each claim against its cited original evidence. Existing pages are context, not evidence. " +
     "Accept only clearly reusable claims with exact support; reject chatter and duplicates; use needs_review for conflict, " +
     "uncertainty, unclear status, or a claim that overstates an artifact report as production truth. Compare every proposal with each " +
     "same-topic page's negation, thresholds, status, and scope; list incompatible page ids in conflictingPageIds. Any nonempty conflict " +
     "must be needs_review, even when a new user request asks to replace the old rule; do not treat that request as resolving the conflict. " +
     "A replacement intent is also needs_review. User requests and assistant statements do not prove implementation or production effectiveness. " +
-    "Captured assistant evidence supports only historical analytical lessons. Reject completion assertions, numerical findings without original supporting data, " +
-    "or recommendations presented as user-approved decisions. A useful explanation of assumptions, analytical methods, or tradeoffs may be accepted as dated analysis. " +
+    "Captured assistant evidence supports only durable historical lessons or attributed analysis/reports under the shared evidence contract. " +
+    "Reject claims presented as actual completion, independently verified numerical findings without original data, or user-approved decisions without user approval. " +
     "Audit target page ownership for this project and verify the topic/decisionObject match before accepting a routed claim. " +
     "For legacy synonym labels, the explicit targetPageId must make the intended page unambiguous. " +
     "Claims for different decision objects must never be merged, while multiple complementary claims in one publication may share a target page. " +

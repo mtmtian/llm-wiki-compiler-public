@@ -100,6 +100,42 @@ class QueueFullRetryTests(unittest.TestCase):
         self.assertFalse((self.state / "resolved/batch-full.json").exists())
         self.assertTrue((self.state / "audit/batch-full.json").exists())
 
+    def test_dismissed_audit_anchor_cannot_be_retried(self):
+        """A durable audit dismissal blocks dry-run and preserves the original refusal bytes."""
+        audit_path = self.state / "audit/batch-full.json"
+        audit = audit_path.read_bytes()
+        save_json(self.state / "resolved/batch-full.json", {
+            "action": "dismiss", "anchor": "audit", "auditHash": "kept"})
+
+        with self.assertRaisesRegex(ValueError, "dismissed queue-full hold"):
+            self.retry(dry_run=True)
+        self.assertEqual(audit_path.read_bytes(), audit)
+        self.assertEqual(list((self.state / "queue").glob("*.json")), [])
+
+    def test_new_needs_review_without_review_file_is_not_counted_as_continuation(self):
+        """A new unresolved status cannot retire its old audit-only queue-full hold."""
+        audit = (self.state / "audit/batch-full.json").read_bytes()
+        self.retry()
+
+        result = self.drain({"status": "needs_review", "publishedPageIds": [], "reviewCount": 1,
+                             "error": "new review is missing"})
+
+        self.assertEqual(result["finalizeErrors"], 1)
+        self.assertFalse((self.state / "resolved/batch-full.json").exists())
+        self.assertEqual((self.state / "audit/batch-full.json").read_bytes(), audit)
+
+    def test_new_needs_review_without_review_file_is_not_counted_as_continuation(self):
+        """A changed needs-review result without a durable successor leaves the original hold open."""
+        audit = (self.state / "audit/batch-full.json").read_bytes()
+        self.retry()
+
+        result = self.drain({"status": "needs_review", "publishedPageIds": [], "reviewCount": 1,
+                             "error": "new review is missing"})
+
+        self.assertEqual(result["finalizeErrors"], 1)
+        self.assertFalse((self.state / "resolved/batch-full.json").exists())
+        self.assertEqual((self.state / "audit/batch-full.json").read_bytes(), audit)
+
 
 if __name__ == "__main__":
     unittest.main()

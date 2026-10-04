@@ -13,7 +13,7 @@ pages. Omitting the materializer identity disables shared projection. Only
 migration of legacy proposals uses a designated `legacyImporterMachineId`; native
 v2 publication does not depend on that machine.
 
-This personal-fork extension adds scoped retrieval and evidence-based task intake. It is built separately from the upstream CLI. Portable project ownership, business mappings, and model settings are versioned in this private repository under [`deployment/`](../../deployment/README.md). The installer expands machine paths; credentials, evidence queues, and runtime state remain local.
+This personal-fork extension adds scoped retrieval and evidence-based task intake. It is built separately from the upstream CLI. Portable runtime templates are versioned under [`deployment/`](../../deployment/README.md). Project ownership, business mappings, machine paths, credentials, evidence queues, and runtime state remain in private host configuration.
 
 ## What happens
 
@@ -34,6 +34,22 @@ are scanned for identity, completion and visible messages instead of using only
 the last bytes, so large tool output cannot hide a turn's start. The scan has byte,
 time and retained-evidence limits; invalid or over-limit input remains an explicit
 capture error rather than becoming partial evidence.
+
+Codex ambient suggestion-generation and safety-filter turns are excluded from
+intake only when one current user message matches a known complete host template,
+including its fixed opening, ordered instructions and final line. The original
+prompt is checked before truncation. A linked artifact or a full queue cannot
+override that exclusion. Similar human requests, JSON answers, incomplete
+templates, an extra user message, and text added before or after the template
+remain eligible. There is no verified host task-kind field at this boundary;
+a human submitting the identical complete template is indistinguishable from
+the host task. Old truncated records are not classified from a prefix alone.
+
+Claude capture retries an unfinished JSON or UTF-8 tail only while the named
+transcript grows, with a two-second total flush wait. Invalid middle rows and
+explicitly malformed tails fail immediately. A complete native final reply,
+`end_turn`, prompt ancestry, session identity and workspace scope are still
+required before any evidence enters the queue.
 
 ## Topic pages in shared v2
 
@@ -278,6 +294,27 @@ The event worker is prepared explicitly with `deployment/install.py --event-driv
 ```
 
 Maintenance drains up to three jobs within the daily budget, checks configured routing cases and empty-scope isolation without calling a model, and writes `maintenance.json`. It lists unresolved review records and operational failures. Hook prompts and session caches expire after seven days; narrow accepted sources and audit history are retained. A human or agent can inspect the cited evidence in each review record. Once the user explicitly resolves a genuine conflict, the agent should apply that decision through the compiler's normal manual candidate-review path, then archive the pending record with `--resolve JOB_ID --action dismiss`. A rejected proposal uses `--action reject`. These actions preserve the review and disposition under `resolved/`. Re-running the automatic pipeline does not bypass its conflict gate. Never auto-approve merely because a record is old.
+
+For persisted health only, use `maintenance.py --config /absolute/private/knowledge-flow.json --status`.
+This mode performs no sync, pruning, Git lookup or snapshot write and cannot be combined with maintenance actions.
+It reports current file counts, audit errors by type and UTC day, unresolved audit-only queue-full holds,
+the last maintenance snapshot and replica status. `lastSuccessfulSyncAt` is the last fully materialized
+local replica generation recorded in status; missing legacy values remain `null`. It does not attest to
+shared projection success: inspect `replica.sharedMaterialization` and replica errors separately.
+
+After reviewing an audit-only `review queue is full` hold, an explicit
+`--resolve JOB_ID --action dismiss` preserves the original audit bytes and records its disposition in
+`resolved/`. Subsequent review retries refuse that dismissed item. Dismissal is idempotent and serialized
+with retry staging; a busy worker returns `resolved: false, busy: true` without waiting.
+Ordinary review files retain their archive-and-remove behavior.
+
+Consolidation uses the same evidence rules for editing and independent review: a short user approval
+can authorize its clearly referenced proposal, while assistant reports remain dated, attributed and
+unverified historical lessons. Evidence capture and page publication dates do not establish current validity.
+For a quote-binding-only rejection, the reviewer may select exact frozen quote IDs; the program changes
+only those bindings and requires a fresh complete review. When every existing page and its labels remain
+unchanged with no new claims or citation retirements, independent review may confirm that no durable
+knowledge is missing and finish the batch without publishing a revision.
 
 Already-published legacy records need a different recovery when a reviewed whole-page
 revision has replaced their claims. After checking every old claim, its original evidence,

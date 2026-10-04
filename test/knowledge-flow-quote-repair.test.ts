@@ -10,7 +10,7 @@ import { repairQuotes } from "../extensions/knowledge-flow/quote-repair.js";
 import { consolidateSession } from "../extensions/knowledge-flow/consolidate.js";
 import { sha256Text } from "../src/connectors/hash.js";
 import type { FlowEvidence } from "../extensions/knowledge-flow/types.js";
-import { accepted, config, draft, job, original, pageId, plan } from "./knowledge-flow-consolidation-fixtures.js";
+import { accepted, config, draft, job, original, pageId, plan, runConsolidation } from "./knowledge-flow-consolidation-fixtures.js";
 
 const report = "## 结论\n\n- **周二发布**，发布前完成 `smoke` 回归。\n- 失败时回滚到上一版本。";
 const evidence = (id: string, kind: FlowEvidence["kind"], text: string): FlowEvidence =>
@@ -49,12 +49,9 @@ describe("deterministic quote repair", () => {
     const stripped = draft();
     stripped.claims[0] = { ...stripped.claims[0], quote: "样例素材测试预算由12个虚构单位调整为28个虚构单位，其他条件不变。" };
     let edits = 0;
-    const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_review: accepted(),
-      knowledge_topic_edit: () => { edits += 1; return stripped; } });
-    const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
-    expect(result.status).toBe("submitted");
-    expect(edits).toBe(1);
-    expect(result.contribution?.claims[0].quote).toBe(formatted);
+    const result = await runConsolidation(input, { knowledge_topic_plan: plan(), knowledge_topic_review: accepted(),
+      knowledge_topic_edit: () => { edits += 1; return stripped; } }, new Map([[pageId, original]]));
+    expect([result.status, edits, result.contribution?.claims[0].quote]).toEqual(["submitted", 1, formatted]);
   });
 
   it("Given a correction, Then each previous claim is anchored to quote options from its own evidence", async () => {

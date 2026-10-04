@@ -72,6 +72,10 @@ describe("knowledge-flow topic identity contract", () => {
     expect(system).toContain("rationale");
     expect(system).toContain("useWhen");
     expect(system).toContain("tradeoffs");
+    expect(system).toContain("the user does not need to repeat every parameter");
+    expect(system).toContain("not independently verified in this batch");
+    expect(system).toContain("Evidence origin=current means only that it arrived in this batch");
+    expect(system).toContain("pagePublishedAt is the page frontmatter updatedAt value");
   });
 
   it("Given a candidate and existing pages, When review is prompted, Then ownership, identity and ambiguous routing gates are explicit", async () => {
@@ -85,6 +89,8 @@ describe("knowledge-flow topic identity contract", () => {
     expect(system).toContain("complementary claims");
     expect(system).toContain("ambiguous routing");
     expect(system).toContain("omitted existing matching page");
+    expect(system).toContain("the user does not need to repeat every parameter");
+    expect(system).toContain("not independently verified in this batch");
   });
 
   it("binds correction schemas to frozen evidence and page destinations", () => {

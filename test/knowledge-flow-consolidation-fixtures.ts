@@ -10,6 +10,8 @@ import { buildFrontmatter } from "../src/utils/markdown.js";
 import type { FlowConfig, FlowJob } from "../extensions/knowledge-flow/types.js";
 import type { LLMProvider } from "../src/utils/provider.js";
 import type { TopicDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
+import { consolidateSession } from "../extensions/knowledge-flow/consolidate.js";
+import type { FlowResult } from "../extensions/knowledge-flow/types.js";
 
 export const pageId = "concepts/sample-creative-budget";
 export const topicId = sha256Text("budget");
@@ -59,6 +61,11 @@ export function config(responses: Record<string, unknown>, onSystem?: (system: s
   return { wikiRoot: path.join(stateDir, "wiki"), stateDir, model: "test", maxProposals: 5,
     maxPendingPerProject: 10, provider, reviewer: provider, machineId: "test",
     exchange: { root: "/tmp/exchange", protocolVersion: 2, participants: ["test"] } };
+}
+
+export function runConsolidation(input: FlowJob, responses: Record<string, unknown>, pages: ReadonlyMap<string, string>,
+  onSystem?: (system: string, toolName: string) => void): Promise<FlowResult> {
+  return consolidateSession(input, config(responses, onSystem), pages);
 }
 
 function toCorrectionShape(toolName: string, request: Record<string, any>, value: unknown): unknown {
