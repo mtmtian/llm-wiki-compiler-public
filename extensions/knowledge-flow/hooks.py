@@ -24,6 +24,7 @@ from operational_context import operational_context
 from read_routing import resolve_read
 from routing import git_identity, resolve, resolve_repo_identity
 from capture import capture_evidence_result, has_substantive_evidence
+from host_automation import capture_automation_reason, job_automation_reason, prompt_automation_reason
 from capture_retry import pending_path, record_capture_pending
 from queue_worker import process_queue as drain_queue
 from queue_worker import MAX_JOB_BYTES
@@ -145,6 +146,9 @@ def prompt_event(event, config):
     record = {"projectId": project, "reason": reason, "readProjectId": read_project,
               "readReason": read_reason, "createdAt": now(), "sessionId": event.get("session_id"),
               "turnId": event.get("turn_id"), "cwd": event.get("cwd")}
+    automation = prompt_automation_reason(event.get("session_id"), event.get("prompt"))
+    if automation:
+        record["hostAutomationReason"] = automation
     if isinstance(event.get("transcript_path"), str):
         record["transcriptPath"] = event["transcript_path"]
     if project:
@@ -215,6 +219,7 @@ def prepare_job(event, record, config, captured=None, artifact_snapshot=None):
             "createdAt": record.get("createdAt") or now(), "prompt": prompt, "lastAssistant": assistant,
             "evidence": evidence, "allowedPageIds": page_ids(config, project, topic_scope="project"),
             "captureStatus": captured["status"], "captureReason": captured.get("reason", ""),
+            "intakeFilterReason": capture_automation_reason(event, record, captured),
             "repoIdentity": repo_identity}
 
 
@@ -272,7 +277,7 @@ def stop_event(event, config):
                             "repoIdentity": record["repoIdentity"], "seen": previous.get("seen", {})})
     job = prepare_job(event, record, config, captured)
     pending = list((state / "queue").glob("*.json"))
-    if len(pending) >= config.get("maxQueuedJobs", 30):
+    if not job.get("intakeFilterReason") and len(pending) >= config.get("maxQueuedJobs", 30):
         if job.get("captureStatus") == "unavailable":
             record_capture_pending(config, identifier, event, record, job,
                                    job.get("captureReason", "named-transcript-unavailable"))
@@ -327,6 +332,11 @@ def enqueue_job(job, queued, config, pending_source=None):
     """Persist substantive evidence without running a model in event-driven hooks."""
     state = Path(config["stateDir"])
     identifier = queued.stem
+    reason = job.get("intakeFilterReason") or (job_automation_reason(job) if job.get("captureStatus") != "unavailable" else "")
+    if reason:
+        clear_capture_error(state, identifier)
+        save_json(state / "completed" / (identifier + ".json"), {"status": "empty", "reason": reason})
+        return {}
     max_bytes = max(1000, int(config.get("maxJobBytes", MAX_JOB_BYTES)))
     prepare_session_job(job, queued, config)
     size = job_bytes(job)

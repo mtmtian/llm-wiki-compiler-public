@@ -1,8 +1,6 @@
 /** Real temporary wikis and evidence-bound publications for topic-page scenarios. */
-import { mkdtemp, mkdir, rm, readdir, readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { tmpdir } from "node:os";
-import { onTestFinished } from "vitest";
 import { sha256Text } from "../src/connectors/hash.js";
 import type { PublicationRecord } from "../extensions/knowledge-flow/publication-types.js";
 import type { FlowClaim, FlowConfig } from "../extensions/knowledge-flow/types.js";
@@ -20,12 +18,7 @@ export function topicRecord(id: string, statements: string[], overrides: Partial
 }
 
 /** No real vault, runtime, model or network access is used by these fixtures. */
-export async function topicFixture(): Promise<FlowConfig> {
-  const root = await mkdtemp(path.join(tmpdir(), "wiki-topic-view-"));
-  onTestFinished(() => rm(root, { recursive: true, force: true }));
-  await mkdir(path.join(root, "wiki/concepts"), { recursive: true });
-  return { wikiRoot: root, stateDir: path.join(root, "state"), model: "test", maxProposals: 5, maxPendingPerProject: 10 };
-}
+export { makeKnowledgeFlowConfig as topicFixture } from "./knowledge-flow-test-fixtures.js";
 
 /** Read observable page/source artifacts rather than implementation-private state. */
 export async function topicFiles(config: FlowConfig, folder = "wiki/concepts"): Promise<Map<string, string>> {

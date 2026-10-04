@@ -8,6 +8,7 @@ private generation and switches the local ``current`` symlink after success.
 from __future__ import annotations
 
 import copy
+import datetime
 import fcntl
 import hashlib
 import json
@@ -52,6 +53,21 @@ def _routing_hash(config: dict[str, Any], topic_routes: list[dict[str, Any]],
                              "topicMigration": topic_migration,
                              **({"topicMerges": topic_merges} if topic_merges else {}),
                              **({"topicScope": "semantic"} if config.get("topicScope") == "semantic" else {})}))
+
+
+def _routed_runtime(config: dict[str, Any], projection: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Apply the reviewed route projection and return the matching identity hash."""
+    topic_routes = projection["topicRoutes"]
+    topic_migration = projection.get("topicMigration")
+    topic_merges = projection.get("topicMerges")
+    runtime_config = copy.deepcopy(config)
+    runtime_config["topicRoutes"] = topic_routes
+    if topic_migration is not None:
+        runtime_config["topicMigration"] = copy.deepcopy(topic_migration)
+    if topic_merges is not None:
+        runtime_config["topicMerges"] = copy.deepcopy(topic_merges)
+    route_hash = _routing_hash(config, topic_routes, topic_migration, topic_merges)
+    return runtime_config, route_hash
 
 
 def _digest_for(baseline_id: str, records: list[dict[str, Any]], worker_hash: str = "",
@@ -149,6 +165,11 @@ def _write_status(config: dict[str, Any], value: dict[str, Any]) -> dict[str, An
     return value
 
 
+def _successful_sync_stamp() -> str:
+    """Stamp a fully materialized local generation in UTC before its status write."""
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _failure_status(config: dict[str, Any], state: Path, current: Path, requested: str | None, error: Exception) -> None:
     """Record failure against the active view, never claiming the requested build was switched."""
     try:
@@ -163,6 +184,8 @@ def _failure_status(config: dict[str, Any], state: Path, current: Path, requeste
              "generationRoot": generation_root, "conflicts": active.get("conflicts", []),
              "rollbackRoot": _previous_rollback(state),
              "lastError": type(error).__name__, "requestedDigest": requested}
+    if isinstance(previous, dict) and isinstance(previous.get("lastSuccessfulSyncAt"), str):
+        value["lastSuccessfulSyncAt"] = previous["lastSuccessfulSyncAt"]
     _write_status(config, value)
 
 
@@ -241,17 +264,9 @@ def _sync_locked(config: dict[str, Any], state: Path, replica: Path, generations
         records = read_records(config)
         resolutions = load_resolutions(config, baseline["snapshotId"], records)
         projection = load_topic_projection(config, baseline["snapshotId"], records)
-        topic_routes = projection["topicRoutes"]
-        topic_migration = projection.get("topicMigration")
-        topic_merges = projection.get("topicMerges")
-        runtime_config = copy.deepcopy(config)
-        runtime_config["topicRoutes"] = topic_routes
-        if topic_migration is not None:
-            runtime_config["topicMigration"] = copy.deepcopy(topic_migration)
-        if topic_merges is not None:
-            runtime_config["topicMerges"] = copy.deepcopy(topic_merges)
+        runtime_config, route_hash = _routed_runtime(config, projection)
         generation_id = _digest_for(baseline["snapshotId"], records, _worker_hash(config),
-                                    _routing_hash(config, topic_routes, topic_migration, topic_merges))
+                                    route_hash)
         record_ids = sorted(item["id"] for item in records)
         if _current_is_digest(current, generations, generation_id):
             response = _generation_response(generations, generation_id)
@@ -273,7 +288,9 @@ def _sync_locked(config: dict[str, Any], state: Path, replica: Path, generations
               "count": len(records), "recordIds": record_ids, "fullyVisibleRecordIds": visible,
               "generationRoot": active_root, "rollbackRoot": rollback_root, "pages": response["pages"],
               "sharedMaterialization": shared, "conflicts": response["conflicts"]}
-    return _write_status(config, classify_conflicts(resolutions, result, records))
+    status = classify_conflicts(resolutions, result, records)
+    status["lastSuccessfulSyncAt"] = _successful_sync_stamp()
+    return _write_status(config, status)
 
 
 def _sync_shared(config: dict[str, Any], generation: str, baseline: dict[str, Any]) -> dict[str, Any]:

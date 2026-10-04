@@ -13,6 +13,7 @@ import { sha256Text } from "../../src/connectors/hash.js";
 import type { LLMMessage, LLMProvider, LLMTool } from "../../src/utils/provider.js";
 import { MAX_PROPOSALS } from "./types.js";
 import type { FlowClaim, FlowEvidence, FlowJob } from "./types.js";
+import { EVIDENCE_SUPPORT_RULES } from "./consolidation-prompts.js";
 
 export const CLAIM_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -85,10 +86,10 @@ function claimTool(): LLMTool {
 }
 
 function extractionSystem(): string {
-  return DURABLE_KNOWLEDGE_POLICY + "\n\nExtract only durable project knowledge with future practical value. Return zero claims when nothing changes future decisions. " +
+  return DURABLE_KNOWLEDGE_POLICY + EVIDENCE_SUPPORT_RULES + "\n\nExtract only durable project knowledge with future practical value. Return zero claims when nothing changes future decisions. " +
     "Do not summarize a whole conversation. User requests, plans, or assistant claims are not proof of implementation or effectiveness. " +
     "A user decision may be decided; a report or artifact may only be historical and cannot prove deployment, tests, or production success. " +
-    "A captured assistant message can support only a dated analytical lesson, never a decided rule, verified metric, test result, or implementation fact. " +
+    "A captured assistant message may support only a durable historical lesson or attributed analysis/report under the shared evidence contract, never a decided rule, verified metric, test result, or implementation fact. " +
     "Do not preserve a completion claim as a lesson. Keep uncertain analysis uncertain. " +
     "Before creating a page, first match an existing page in the same project using the canonical topic and decisionObject; when matched, reuse its targetPageId. " +
     "Existing page metadata knowledgeTopic and knowledgeDecisionObject are valid matching signals and may be reused. " +

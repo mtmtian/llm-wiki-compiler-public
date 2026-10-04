@@ -4,16 +4,15 @@
  * replaces them with the reviewed body, and later records apply to the merged page. A removed page must
  * never be recreated, and any drift from the reviewed bytes or a dropped citation fails closed.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sha256Text } from "../src/connectors/hash.js";
 import { parseFrontmatter } from "../src/utils/markdown.js";
-import { materializeRecords } from "../extensions/knowledge-flow/materialize.js";
 import { stableTopicId } from "../extensions/knowledge-flow/topic-revision.js";
 import type { PublicationRecord } from "../extensions/knowledge-flow/publication-types.js";
 import type { TopicMerge } from "../extensions/knowledge-flow/topic-revision-types.js";
-import { makeKnowledgeFlowConfig } from "./knowledge-flow-test-fixtures.js";
+import { makeKnowledgeFlowConfig, materializeKnowledgeFlow } from "./knowledge-flow-test-fixtures.js";
 
 const ALPHA = "concepts/alpha-topic-aaaa1111";
 const BETA = "concepts/beta-topic-bbbb2222";
@@ -43,19 +42,23 @@ const gamma = record({ name: "gamma", pageId: GAMMA, text: "样例丙的结论",
 
 async function materialize(records: PublicationRecord[], merges?: TopicMerge[]) {
   const config = { ...await makeKnowledgeFlowConfig("wiki-topic-merge-"), ...(merges ? { topicMerges: merges } : {}) };
-  const result = await materializeRecords(config, records);
-  const read = (pageId: string) => readFile(path.join(config.wikiRoot, "wiki", `${pageId}.md`), "utf8").catch(() => null);
-  return { result, read };
+  return materializeKnowledgeFlow(config, records);
+}
+
+/** Freeze exactly the reviewed page bodies and hashes for either merge scenario. */
+function mergeFromPages(pages: Array<[string, string]>, metadata: Omit<TopicMerge, "body" | "previousPages" | "mergedAt">): TopicMerge {
+  return { ...metadata, body: pages.map(([, page]) => parseFrontmatter(page).body.trim()).join("\n\n"),
+    previousPages: pages.map(([pageId, page]) => ({ pageId, sha256: sha256Text(page) })),
+    mergedAt: "2026-10-04T00:00:00Z" };
 }
 
 /** Review the pages as they are now and merge beta into alpha, keeping every citation of both. */
 async function reviewedMerge(overrides: Partial<TopicMerge> = {}): Promise<TopicMerge> {
   const { read } = await materialize([alpha, beta, gamma]);
   const [alphaPage, betaPage] = [(await read(ALPHA))!, (await read(BETA))!];
-  return { pageId: ALPHA, title: "甲乙合并", topic: `${ALPHA} 主题`, decisionObject: `${ALPHA} 对象`,
-    body: `${parseFrontmatter(alphaPage).body.trim()}\n\n${parseFrontmatter(betaPage).body.trim()}`,
-    previousPages: [{ pageId: ALPHA, sha256: sha256Text(alphaPage) }, { pageId: BETA, sha256: sha256Text(betaPage) }],
-    absorbedRecordIds: [alpha.id, beta.id], mergedAt: "2026-10-04T00:00:00Z", reason: "同属一个样例对象", ...overrides };
+  return { ...mergeFromPages([[ALPHA, alphaPage], [BETA, betaPage]], {
+    pageId: ALPHA, title: "甲乙合并", topic: `${ALPHA} 主题`, decisionObject: `${ALPHA} 对象`,
+    absorbedRecordIds: [alpha.id, beta.id], reason: "同属一个样例对象" }), ...overrides };
 }
 
 describe("reviewed merges of revision-layer pages", () => {
@@ -122,19 +125,16 @@ const migration = { version: 1 as const, basisRecordIds: [], pages: [{ projectId
 async function materializeMigrated(merges?: TopicMerge[]) {
   const config = { ...await makeKnowledgeFlowConfig("wiki-merge-migration-"), topicMigration: migration, ...(merges ? { topicMerges: merges } : {}) };
   await writeFile(path.join(config.wikiRoot, "wiki", `${LEGACY}.md`), legacyBody);
-  const result = await materializeRecords(config, [alpha]);
-  const read = (pageId: string) => readFile(path.join(config.wikiRoot, "wiki", `${pageId}.md`), "utf8").catch(() => null);
-  return { result, read };
+  return materializeKnowledgeFlow(config, [alpha]);
 }
 
 /** Review the migration page and the revision page as they are now, merged into `survivor`. */
 async function migratedMerge(survivor: string): Promise<TopicMerge> {
   const { read } = await materializeMigrated();
   const [alphaPage, migratedPage] = [(await read(ALPHA))!, (await read(MIGRATED))!];
-  return { pageId: survivor, title: "甲与发布合并", topic: "样例发布", decisionObject: "小批量发布",
-    body: `${parseFrontmatter(alphaPage).body.trim()}\n\n${parseFrontmatter(migratedPage).body.trim()}`,
-    previousPages: [{ pageId: ALPHA, sha256: sha256Text(alphaPage) }, { pageId: MIGRATED, sha256: sha256Text(migratedPage) }],
-    absorbedRecordIds: [alpha.id], mergedAt: "2026-10-04T00:00:00Z", reason: "同属一个样例工作流" };
+  return mergeFromPages([[ALPHA, alphaPage], [MIGRATED, migratedPage]], {
+    pageId: survivor, title: "甲与发布合并", topic: "样例发布", decisionObject: "小批量发布",
+    absorbedRecordIds: [alpha.id], reason: "同属一个样例工作流" });
 }
 
 describe("reviewed merges that include a page of the legacy migration", () => {

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import test_replica
+from common import load_json
 from queue_replica import prepare
 from replica import publish_record, replica_status, sync_replica
 from replica_integrity import read_verified_generation
@@ -74,6 +75,20 @@ class ReplicaRecoveryTests(unittest.TestCase):
         """Given a reader's seal, When a page changes, Then sync fails visibly and rebuilds."""
         self.config['publishEnabled'] = False
         self.assert_recovery()
+
+    def test_last_successful_sync_survives_a_later_failed_sync(self):
+        """A later integrity failure changes current health but preserves the last successful timestamp."""
+        first = sync_replica(self.config, self.materialize)
+        successful_at = first["lastSuccessfulSyncAt"]
+        self.assertTrue(successful_at.endswith("Z"))
+        self.damage(first["generationRoot"])
+
+        with self.assertRaises(ValueError):
+            sync_replica(self.config, self.materialize)
+
+        failed_status = load_json(self.state / "replica/status.json")
+        self.assertEqual(failed_status["lastSuccessfulSyncAt"], successful_at)
+        self.assertEqual(failed_status["lastError"], "ValueError")
 
     def test_baseline_consumer_tampering_quarantines_then_rebuilds(self):
         """Given copied baseline inputs, When one changes, Then quarantine and rebuild restore it."""

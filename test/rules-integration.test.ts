@@ -113,11 +113,14 @@ describe("rules CLI integration", () => {
     const cwd = await makeWorkspace("extract-no-key");
     try {
       await writeFile(path.join(cwd, "sources", "guide.md"), "Always run tests.\nNo exceptions.\n", "utf-8");
-      const result = await runCLI(["rules", "extract"], cwd, {
+      const result = await runCLI(["rules", "extract", "--provider", "anthropic"], cwd, {
         ANTHROPIC_API_KEY: "",
         ANTHROPIC_AUTH_TOKEN: "",
+        LLMWIKI_EMBEDDING_PROVIDER: "",
+        LLMWIKI_CLAUDE_SETTINGS_PATH: path.join(cwd, "absent-claude-settings.json"),
       });
       expectCLIFailure(result);
+      expect(`${result.stdout}${result.stderr}`).toContain("Anthropic credentials are required");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

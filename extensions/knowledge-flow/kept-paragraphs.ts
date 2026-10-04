@@ -25,8 +25,16 @@ const KEEP_PLACEHOLDER = /\{\{keep:[^}\r\n]*\}\}/;
 
 /** The editor's view of planned pages: an existing body arrives as paragraphs it can keep by placeholder. */
 export function editablePages(pages: readonly PlannedPage[]) {
-  return pages.map(({ original, ...page }) => original === null ? { ...page, original }
-    : { ...page, originalParagraphs: pageParagraphs(original).map((text, index) => ({ keep: `{{keep:P${index + 1}}}`, text })) });
+  return pages.map(({ original, ...page }) => ({ ...page, pagePublishedAt: pagePublishedAt(original),
+    ...(original === null ? { original } : { originalParagraphs: pageParagraphs(original).map((text, index) => ({ keep: `{{keep:P${index + 1}}}`, text })) }) }));
+}
+
+/** Read the page publication timestamp without treating it as evidence recency or effective date. */
+export function pagePublishedAt(original: string | null): string | null {
+  if (original === null) return null;
+  const updatedAt = parseFrontmatter(original).meta.updatedAt;
+  if (typeof updatedAt === "string") return updatedAt;
+  return updatedAt instanceof Date && Number.isFinite(updatedAt.getTime()) ? updatedAt.toISOString() : null;
 }
 
 /** Put the exact original paragraph back for every valid placeholder of each drafted page. */

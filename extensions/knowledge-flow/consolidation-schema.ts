@@ -32,7 +32,8 @@ const claimDecisions = (claimIndex: Record<string, unknown>, maxItems = MAX_CLAI
   array(object({ claimIndex, decision: verdict, reason: text(2000) }), maxItems);
 const reviewOutput = object({ decision: verdict, reason: text(2000),
   checkedClaimIndexes: array(index, 5), checkedPageIds: array(text(180), 5) },
-  { checkedRetiredCitations: array(text(1024), 500), claimDecisions: claimDecisions(index) });
+  { checkedRetiredCitations: array(text(1024), 500), claimDecisions: claimDecisions(index),
+    quoteRepairs: array(object({ claimIndex: index, quoteId: text(180) }), 5) });
 
 function allowedStrings(values: readonly string[], maxLength: number): Record<string, unknown> {
   return values.length ? { ...text(maxLength), enum: [...new Set(values)] } : { not: {} };
@@ -166,15 +167,19 @@ export const topicReviewTool: LLMTool = { name: "knowledge_topic_review", descri
  * Catalog pages remain context only and cannot be claimed as reviewed output.
  */
 export function createTopicReviewTool(claimCount: number, pageIds: readonly string[],
-  retirementCitations: readonly string[]): LLMTool {
+  retirementCitations: readonly string[], quoteIds: readonly string[] = []): LLMTool {
   const claimIndexes = Array.from({ length: claimCount }, (_, value) => value);
   // Empty scopes are enforced by maxItems: 0; Codex does not support `not`.
   const pageSchema = pageIds.length ? allowedStrings(pageIds, 180) : text(180);
   const retirementSchema = retirementCitations.length ? allowedStrings(retirementCitations, 1024) : text(1024);
+  const quoteIdSchema = quoteIds.length ? allowedStrings(quoteIds, 180) : text(180);
+  const quoteRepairSchema = array(object({ claimIndex: index, quoteId: quoteIdSchema }),
+    quoteIds.length ? Math.min(5, claimCount) : 0);
   return { name: topicReviewTool.name, description: topicReviewTool.description,
     input_schema: object({ decision: verdict, reason: text(2000),
       checkedClaimIndexes: array(allowedIndexes(claimIndexes), Math.min(5, claimIndexes.length)),
       checkedPageIds: array(pageSchema, Math.min(5, pageIds.length)) },
     { checkedRetiredCitations: array(retirementSchema, Math.min(500, retirementCitations.length)),
-      claimDecisions: claimDecisions(allowedIndexes(claimIndexes), claimCount ? MAX_CLAIM_DECISIONS : 0) }) };
+      claimDecisions: claimDecisions(allowedIndexes(claimIndexes), claimCount ? MAX_CLAIM_DECISIONS : 0),
+      quoteRepairs: quoteRepairSchema }) };
 }

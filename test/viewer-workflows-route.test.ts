@@ -18,7 +18,7 @@
  * `c5c9e5e`).
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   profileBootstrapResponse,
   jsonResponse,
@@ -340,12 +340,11 @@ describe("#/workflows — only the documented status fields reach the DOM", () =
   });
 });
 
-/** Mount on the home route, click the sidebar's Workflows entry, and settle. */
+/** Mount on the home route and click Workflows; each test awaits its observable result. */
 async function clickSidebarWorkflows(): Promise<Window> {
   const mounted = await mountViewerDom(responderWithRuns(RUNS));
   const win = mounted.dom.window as unknown as Window;
   (win.document.querySelector('a[data-route="workflows"]') as HTMLElement).click();
-  await mounted.flush();
   return win;
 }
 
@@ -359,15 +358,15 @@ describe("sidebar Workflows entry", () => {
 
   it("lands on #/workflows and highlights itself, not Reviews", async () => {
     const { document: doc, location } = await clickSidebarWorkflows();
-    expect(location.hash).toBe("#/workflows");
-    expect(doc.querySelector('a[data-route="workflows"]')?.getAttribute("aria-current")).toBe(
-      "page",
-    );
-    expect(doc.querySelector('a[data-route="reviews"]')?.getAttribute("aria-current")).toBeNull();
+    await vi.waitFor(() => {
+      expect(location.hash).toBe("#/workflows");
+      expect(doc.querySelector('a[data-route="workflows"]')?.getAttribute("aria-current")).toBe("page");
+      expect(doc.querySelector('a[data-route="reviews"]')?.getAttribute("aria-current")).toBeNull();
+    });
   });
 
   it("renders the runs once navigated there", async () => {
     const { document: doc } = await clickSidebarWorkflows();
-    expect(doc.querySelectorAll("[data-main-pane] .list-row")).toHaveLength(3);
+    await vi.waitFor(() => expect(doc.querySelectorAll("[data-main-pane] .list-row")).toHaveLength(3));
   });
 });

@@ -7,10 +7,13 @@ become knowledge. Bounded tail reads fail closed if a full turn is unavailable.
 """
 
 import json
+import re
 from pathlib import Path
 
 MAX_BYTES = 8_000_000
 MAX_CHARS = 120_000
+NUMBER_PREFIX = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+NUMBER_SUFFIXES = {".", "e", "E", "e+", "e-", "E+", "E-"}
 
 
 class IncompleteTranscript(ValueError):
@@ -49,18 +52,73 @@ def read_rows(event, claude_dir):
         stream.seek(max(0, size - MAX_BYTES))
         raw = stream.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
-        raise ValueError("transcript-changed-during-read")
+        raise IncompleteTranscript("transcript-changed-during-read")
     if size > MAX_BYTES:
         raw = raw.partition(b"\n")[2]
-    try:
-        rows = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
-    except (json.JSONDecodeError, UnicodeError) as error:
-        raise IncompleteTranscript("transcript-partial-write") from error
+    lines = raw.split(b"\n")
+    terminated = raw.endswith(b"\n")
+    if terminated:
+        lines.pop()
+    rows = [decode_row(line, index == len(lines) - 1 and not terminated)
+            for index, line in enumerate(lines) if line.strip()]
     if not rows:
         raise IncompleteTranscript("transcript-empty")
     if any(not isinstance(row, dict) for row in rows):
         raise ValueError("transcript-invalid")
     return rows
+
+
+def decode_row(line, incomplete_tail):
+    """Decode a JSONL row, retrying only an unfinished unterminated tail."""
+    try:
+        text = line.decode("utf-8")
+    except UnicodeDecodeError as error:
+        unfinished_utf8 = (incomplete_tail and error.reason == "unexpected end of data"
+                            and error.end == len(line))
+        if unfinished_utf8:
+            raise IncompleteTranscript("transcript-partial-write") from error
+        raise ValueError("transcript-invalid-utf8") from error
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        if incomplete_tail and incomplete_json_prefix(text, error):
+            raise IncompleteTranscript("transcript-partial-write") from error
+        raise ValueError("transcript-invalid-json") from error
+
+
+def incomplete_json_prefix(text, error):
+    """Recognize JSON parser failures that could finish with more tail bytes."""
+    if error.msg == "Unterminated string starting at":
+        return True
+    if incomplete_unicode_escape(text, error) or incomplete_number_prefix(text, error):
+        return True
+    suffix = text[error.pos:]
+    partial_literals = {"t", "tr", "tru", "f", "fa", "fal", "fals", "n", "nu", "nul", "-"}
+    return not suffix.strip() or (error.msg == "Expecting value" and suffix in partial_literals)
+
+
+def incomplete_unicode_escape(text, error):
+    """Accept only a trailing prefix of four hexadecimal digits after ``\\u``."""
+    if error.msg != "Invalid \\uXXXX escape" or error.pos == 0 or error.pos >= len(text):
+        return False
+    if text[error.pos - 1:error.pos + 1] != "\\u":
+        return False
+    digits = text[error.pos + 1:]
+    return len(digits) < 4 and all(char in "0123456789abcdefABCDEF" for char in digits)
+
+
+def incomplete_number_prefix(text, error):
+    """Recognize an otherwise valid number ending at its fraction or exponent marker."""
+    if error.msg != "Expecting ',' delimiter":
+        return False
+    suffix = text[error.pos:]
+    if suffix not in NUMBER_SUFFIXES:
+        return False
+    prefix = text[:error.pos]
+    match = NUMBER_PREFIX.search(prefix)
+    if not match or (match.start() and prefix[match.start() - 1] not in " \t\r\n:[,"):
+        return False
+    return suffix != "." or "." not in match.group()
 
 
 def current_branch(rows, event, project_roots):

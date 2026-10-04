@@ -139,6 +139,21 @@ describe("whole-session topic consolidation", () => {
     for (const clause of required) expect(reviewPrompt).toContain(clause);
   });
 
+  it("Given short approvals and dated source context, When edit and review are prompted, Then both use the shared evidence and publication-time contract", async () => {
+    const systems = new Map<string, string>();
+    const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: draft(), knowledge_topic_review: accepted() },
+      (system, toolName) => systems.set(toolName, system));
+    await consolidateSession(job(), runtime, new Map([[pageId, original]]));
+    const edit = systems.get("knowledge_topic_edit") ?? "";
+    const review = systems.get("knowledge_topic_review") ?? "";
+    for (const clause of ["the user does not need to repeat every parameter", "not independently verified in this batch",
+      "pagePublishedAt is the page frontmatter updatedAt value", "Neither a newer observation nor a later page publication alone establishes supersession"]) {
+      expect(edit).toContain(clause);
+      expect(review).toContain(clause);
+    }
+    expect(review).toContain("ENTIRE diff's problems can be fixed solely by changing primary evidence/quote bindings");
+  });
+
   it("Given a draft deleting historical citations, Then rejects it before publication", async () => {
     const changed = draft(); changed.pages[0].body = "## 当前结论\n预算28个虚构单位。{{claim:0}}";
     await expectHeldDraft(changed, /citation/);

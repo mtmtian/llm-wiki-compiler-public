@@ -12,11 +12,130 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from deployment.agent_plugins.claude_capture import IncompleteTranscript, evidence
+PLUGIN_DIR = Path(__file__).parent / "agent_plugins"
+sys.path.insert(0, str(PLUGIN_DIR))
+from claude_adapter import MAX_FLUSH_WAIT_SECONDS, capture_after_flush
+from claude_capture import IncompleteTranscript, decode_row, evidence
+from deployment.agent_plugins.install_settings import EVENT_TIMEOUTS
+
+
+class FakeClock:
+    """Advance adapter time deterministically and mutate the transcript on polls."""
+
+    def __init__(self, on_sleep=None) -> None:
+        self.current = 0.0
+        self.on_sleep = on_sleep
+
+    def now(self) -> float:
+        """Return fake monotonic time."""
+        return self.current
+
+    def sleep(self, delay: float) -> None:
+        """Advance time without blocking, then simulate one host flush step."""
+        self.current += delay
+        if self.on_sleep:
+            self.on_sleep()
 
 
 class ClaudeCaptureTests(unittest.TestCase):
     """Verify complete ancestry, final endings and text-only evidence."""
+
+    def test_partial_unterminated_tail_retries_when_transcript_grows(self) -> None:
+        """Given a partial JSON tail, when bytes arrive, then a full branch is captured."""
+        with tempfile.TemporaryDirectory() as temp:
+            event, profile = fixture(Path(temp))
+            path = Path(event["transcript_path"])
+            path.write_bytes(path.read_bytes() + b'{"type":"file-history-snapshot"')
+            def complete_tail() -> None:
+                with path.open("ab") as stream:
+                    stream.write(b"}\n")
+            clock = FakeClock(complete_tail)
+            result = capture_after_flush_test(event, profile, clock)
+            self.assertEqual(["ask", "answer"], [item["text"] for item in result])
+            self.assertGreater(clock.current, 0)
+
+    def test_partial_utf8_tail_retries_when_transcript_grows(self) -> None:
+        """Given a split UTF-8 code point, when bytes arrive, then the branch is captured."""
+        with tempfile.TemporaryDirectory() as temp:
+            event, profile = fixture(Path(temp))
+            path = Path(event["transcript_path"])
+            path.write_bytes(path.read_bytes() + b'{"type":"file-history-snapshot","name":"\xe2\x82')
+            def finish_utf8_tail() -> None:
+                with path.open("ab") as stream:
+                    stream.write(b'\xac"}\n')
+            result = capture_after_flush_test(event, profile, FakeClock(finish_utf8_tail))
+            self.assertEqual(["ask", "answer"], [item["text"] for item in result])
+
+    def test_partial_json_escape_and_number_suffixes_retry_only_when_completable(self) -> None:
+        """Given valid JSON prefixes, when decoding a tail, then only completable forms retry."""
+        slash = bytes([92])
+        incomplete = [b'{"value":"' + slash + b"u00", b'{"value":1e', b'{"value":1e+',
+                      b'{"value":1.', b'{"value":1.2e-']
+        invalid = [b'{"value":"' + slash + b'u0Z"}', b'{"value":"' + slash + b'q"}',
+                   b'{"value":1..', b'{"value":01e', b'{"value":tru ', b'{"value":- ']
+        for line in incomplete:
+            with self.subTest(line=line), self.assertRaisesRegex(IncompleteTranscript, "partial-write"):
+                decode_row(line, True)
+        for line in invalid:
+            with self.subTest(line=line), self.assertRaisesRegex(ValueError, "transcript-invalid-json"):
+                decode_row(line, True)
+
+    def test_middle_malformed_row_fails_without_retry(self) -> None:
+        """Given a bad middle row, when read, then it fails without retry."""
+        with tempfile.TemporaryDirectory() as temp:
+            event, profile = fixture(Path(temp))
+            path = Path(event["transcript_path"])
+            rows = path.read_bytes().splitlines(keepends=True)
+            path.write_bytes(rows[0] + b"{bad}\n" + rows[1])
+            clock = FakeClock()
+            with self.assertRaisesRegex(ValueError, "transcript-invalid-json"):
+                capture_after_flush_test(event, profile, clock)
+            self.assertEqual(0, clock.current)
+            path.write_bytes(rows[0] + rows[1] + b"{bad")
+            with self.assertRaisesRegex(ValueError, "transcript-invalid-json"):
+                capture_after_flush_test(event, profile, clock)
+            self.assertEqual(0, clock.current)
+
+    def test_continuous_growth_stops_at_the_flush_deadline(self) -> None:
+        """Given ongoing irrelevant writes, when time expires, retries stop."""
+        with tempfile.TemporaryDirectory() as temp:
+            event, profile = fixture(Path(temp))
+            event["last_assistant_message"] = "not-yet-flushed"
+            path = Path(event["transcript_path"])
+            def append_irrelevant_row() -> None:
+                with path.open("ab") as stream:
+                    stream.write(b'{"type":"file-history-snapshot"}\n')
+            clock = FakeClock(append_irrelevant_row)
+            with self.assertRaisesRegex(IncompleteTranscript, "completion-not-found"):
+                capture_after_flush_test(event, profile, clock)
+            self.assertGreater(clock.current, 0)
+            self.assertLessEqual(clock.current, MAX_FLUSH_WAIT_SECONDS)
+
+    def test_complete_target_branch_survives_an_unrelated_final_row(self) -> None:
+        """Given a complete target branch, when unrelated data trails it, capture succeeds."""
+        with tempfile.TemporaryDirectory() as temp:
+            event, profile = fixture(Path(temp))
+            path = Path(event["transcript_path"])
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"type": "file-history-snapshot"}) + "\n")
+            result = capture(event, profile)
+            self.assertEqual(["ask", "answer"], [item["text"] for item in result])
+
+    def test_stop_timeout_leaves_room_for_adapter_flush_wait(self) -> None:
+        """Given Claude's Stop limit, the adapter wait stays below half of it."""
+        self.assertLess(MAX_FLUSH_WAIT_SECONDS, EVENT_TIMEOUTS["Stop"] / 2)
+
+    def test_missing_final_reply_never_enters_the_queue(self) -> None:
+        """Given a Stop without final text, when handled, then no queue item is created."""
+        with tempfile.TemporaryDirectory() as temp:
+            event, profile = fixture(Path(temp))
+            event["hook_event_name"] = "Stop"
+            path = Path(event["transcript_path"])
+            path.write_bytes(path.read_bytes().splitlines(keepends=True)[0])
+            config, queued = bridge_config(event, profile)
+            self.assertEqual({}, run_bridge(event, config, profile))
+            self.assertFalse(queued.exists())
+            self.assertTrue((queued.parent.parent / "capture-errors" / queued.name).exists())
 
     def test_complete_branch_keeps_native_locators_and_visible_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -256,6 +375,15 @@ def capture(event: dict, profile: Path, project_roots: set[Path] | None = None) 
     common.safe_text = lambda value, limit: value[:limit]
     with patch.dict(sys.modules, {"common": common}):
         return evidence(event, profile, frozenset(project_roots or ()))
+
+
+def capture_after_flush_test(event: dict, profile: Path, clock: FakeClock) -> list[dict]:
+    """Run the adapter with deterministic shared helpers and a fake clock."""
+    common = types.ModuleType("common")
+    common.digest = lambda value: hashlib.sha256(value.encode()).hexdigest()
+    common.safe_text = lambda value, limit: value[:limit]
+    with patch.dict(sys.modules, {"common": common}):
+        return capture_after_flush(event, profile, frozenset(), clock.now, clock.sleep)
 
 
 if __name__ == "__main__":
