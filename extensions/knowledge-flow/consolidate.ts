@@ -116,7 +116,8 @@ async function runEditStage(run: EditRunContext, stage: string | undefined,
   if (!attempt.ok) return { result: held(run.job, attempt.error, correction?.previousDraft.summary ?? "") };
   const anchored = correction ? preserveEvidence(attempt.draft, correction.previousDraft, { evidence: run.job.evidence,
     catalog: run.correctionCatalog, disputed: disputedClaims(run.claimReviews.at(-1)),
-    retained: new Set(correction.review?.retainEvidenceForClaims ?? []) }) : attempt.draft;
+    retained: new Set([...(correction.review?.retainEvidenceForClaims ?? []),
+      ...(correction.review?.claimDecisions ?? []).filter(item => item.decision === "accept").map(item => item.claimIndex)]) }) : attempt.draft;
   const repaired = withRepairedQuotes(anchored, run.job.evidence);
   const draft = withRepairedCitations(withRoleAuthority(repaired, run.job.evidence), run.topic.pages);
   return validateAndReviewStage(run, stage, correction, draft);

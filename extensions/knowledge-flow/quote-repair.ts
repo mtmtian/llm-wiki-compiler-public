@@ -15,7 +15,8 @@
  * A correction must not move a claim to unrelated evidence. preserveEvidence keeps a corrected
  * claim's original references when the review accepted the claim or explicitly retained its evidence
  * while requesting a prose repair. Other disputed claims may choose a different source. All corrected
- * claims still pass normal validation and a fresh independent whole-page review.
+ * claims still pass normal validation and a fresh independent whole-page review. Before any review,
+ * only primary anchors are restored; the editor can still repair invalid supporting references.
  */
 import type { FlowClaim, FlowEvidence } from "./types.js";
 import type { TopicDraft } from "./consolidation-draft.js";
@@ -107,7 +108,7 @@ export interface PreservationContext {
   catalog: readonly CorrectionEvidence[];
   /** Previous claim indexes the review did not accept; their evidence may legitimately change. */
   disputed: ReadonlySet<number>;
-  /** The reviewer explicitly found these references suitable for the requested prose repair. */
+  /** Claims the reviewer accepted or explicitly retained for the requested prose repair. */
   retained?: ReadonlySet<number>;
 }
 
@@ -116,12 +117,13 @@ export function preserveEvidence(corrected: TopicDraft, previous: TopicDraft, co
   const protectedClaims = previous.claims.filter((_, index) => !context.disputed.has(index) || context.retained?.has(index));
   return { ...corrected, claims: corrected.claims.map(claim => {
     const index = sameClaim(claim, previous.claims);
-    const before = index === undefined ? undefined : previous.claims[index];
-    if (!before || !protectedClaims.includes(before)) return claim;
+    if (index === undefined || !protectedClaims.includes(previous.claims[index])) return claim;
+    const before = previous.claims[index];
     const source = context.evidence.find(item => item.id === before.evidenceId);
     if (!source) return claim;
     const quote = source.text.includes(before.quote) ? before.quote : bestOption(context.catalog, before);
-    return quote ? { ...claim, evidenceId: before.evidenceId, quote, supportingQuotes: before.supportingQuotes } : claim;
+    const supportingQuotes = context.retained?.has(index) ? before.supportingQuotes : claim.supportingQuotes;
+    return quote ? { ...claim, evidenceId: before.evidenceId, quote, supportingQuotes } : claim;
   }) };
 }
 
