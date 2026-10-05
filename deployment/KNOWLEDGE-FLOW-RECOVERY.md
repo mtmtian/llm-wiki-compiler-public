@@ -39,7 +39,12 @@ restored only after the patch is applied. Publication formats do not change.
 
 An accepted claim is immutable during correction. Other claims retain primary
 and supporting references unless the independent reviewer explicitly permits
-source replacement. Source replacement cannot raise authority. Missing or
+source replacement. Source replacement cannot raise authority. A permitted
+replacement settles the claim's authority: the program applies the shape the new
+source permits (an assistant quote carries only a historical lesson; an artifact
+quote only historical non-decision material) and drops assistant supporting
+quotes from a primary that is no longer the user; the complete result is still
+reviewed independently. Missing or
 ambiguous per-claim verdicts do not grant edit permission. Page text may be
 rewritten, but the complete resulting diff still requires independent review.
 

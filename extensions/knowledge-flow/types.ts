@@ -60,7 +60,7 @@ export interface FlowConfig {
   knowledgeLedger?: boolean;
   wikiRoot: string;
   stateDir: string;
-  model: "gpt-5.6-luna" | string;
+  model: "gpt-6-luna" | string;
   maxProposals: number;
   maxPendingPerProject: number;
   machineId?: string;

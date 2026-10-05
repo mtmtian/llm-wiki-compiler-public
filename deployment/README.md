@@ -264,6 +264,8 @@ topic/decisionObject，避免模型改写引用、把片段配到错误来源或
 不会把同一份无效模型缓存反复送回重试。审核回执只允许列出本次实际修改页、claim 和退役引用，不能把目录中未修改的页面列作已审核。
 纠正输出按主证据角色限制 `kind`、`status` 和补充证据范围：assistant 只能形成历史 lesson，
 artifact 只能形成历史事实、约束或经验；只有用户主证据可选择 assistant 补充引文。
+审核明确许可换源且主引文确实变化时，程序按新来源套用这一限制（assistant 引文形成历史 lesson，
+artifact 引文形成历史非决定材料）并丢弃从用户主证据继承的 assistant 补充引文，完整结果仍交独立审核。
 宿主以 user 角色注入、但并非用户本人输入的消息（后台任务通知 `<task-notification>`、自动化心跳 `<heartbeat>`、
 页面事件 `<external_codex_apps_open_page>`、环境上下文 `<environment_context>`），若整条消息只由这些块组成，采集时记为 artifact 证据；
 消息里还有用户自己的文字时仍按 user 证据处理。

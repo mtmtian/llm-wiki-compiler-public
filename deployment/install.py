@@ -64,7 +64,7 @@ RUNTIME_FILES = ("dist/cli.js", "alma-session.py",
 
 DEFAULT_ENV = {
     "LLMWIKI_PROVIDER": "codex-agent",
-    "LLMWIKI_MODEL": "gpt-5.6-luna",
+    "LLMWIKI_MODEL": "gpt-6-luna",
     "LLMWIKI_EMBEDDING_PROVIDER": "ollama",
     "LLMWIKI_EMBEDDING_MODEL": "nomic-embed-text",
     "OLLAMA_EMBEDDINGS_HOST": "http://127.0.0.1:11434/v1",
@@ -226,7 +226,7 @@ def load_environment(directory: Path) -> dict[str, str]:
                 raise ValueError("compiler environment values must be scalar")
             values[key] = str(source[key])
     for key, expected in (("LLMWIKI_PROVIDER", "codex-agent"),
-                          ("LLMWIKI_MODEL", "gpt-5.6-luna"),
+                          ("LLMWIKI_MODEL", "gpt-6-luna"),
                           ("LLMWIKI_EMBEDDING_PROVIDER", "ollama")):
         if values[key] != expected:
             raise ValueError(f"unsupported {key} policy")
