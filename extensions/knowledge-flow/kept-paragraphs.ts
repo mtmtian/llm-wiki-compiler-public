@@ -17,7 +17,15 @@
  */
 import { parseFrontmatter } from "../../src/utils/markdown.js";
 import type { TopicDraft } from "./consolidation-draft.js";
+import { MAX_TOPIC_BODY_CHARS } from "./consolidation-plan.js";
 import type { PlannedPage } from "./consolidation-plan.js";
+
+export interface TopicPageBodyBudget {
+  pageId: string;
+  currentBodyChars: number;
+  maximumBodyChars: number;
+  additionalAvailableChars: number;
+}
 
 const FENCE = /^\s*(`{3,}|~{3,})/;
 const KEEP_LINE = /^\s*\{\{keep:P(\d+)\}\}\s*$/;
@@ -27,6 +35,18 @@ const KEEP_PLACEHOLDER = /\{\{keep:[^}\r\n]*\}\}/;
 export function editablePages(pages: readonly PlannedPage[]) {
   return pages.map(({ original, ...page }) => ({ ...page, pagePublishedAt: pagePublishedAt(original),
     ...(original === null ? { original } : { originalParagraphs: pageParagraphs(original).map((text, index) => ({ keep: `{{keep:P${index + 1}}}`, text })) }) }));
+}
+
+/** Measure existing bodies after frontmatter parsing, independently of placeholder token length. */
+export function pageBodyBudgets(pages: readonly PlannedPage[]): TopicPageBodyBudget[] {
+  return pages.map(page => topicPageBodyBudget(page.pageId,
+    page.original === null ? 0 : parseFrontmatter(page.original).body.length));
+}
+
+/** Build the one page-length contract shared by editor prompts and post-expansion validation. */
+export function topicPageBodyBudget(pageId: string, currentBodyChars: number): TopicPageBodyBudget {
+  return { pageId, currentBodyChars, maximumBodyChars: MAX_TOPIC_BODY_CHARS,
+    additionalAvailableChars: MAX_TOPIC_BODY_CHARS - currentBodyChars };
 }
 
 /** Read the page publication timestamp without treating it as evidence recency or effective date. */

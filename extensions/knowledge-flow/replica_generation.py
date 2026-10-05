@@ -27,6 +27,7 @@ from replica_recovery import clear_recovered_error, verify_generation
 from shared_materialize import promote_generation
 from topic_routes import load_topic_projection
 from publication_resolutions import load_resolutions, classify_conflicts
+from ledger_projection import READ_PROJECTION_VERSION, write_reviewed_claims_projection
 
 MATERIALIZE_TIMEOUT = 300
 RESPONSE_FILE = Path(".llmwiki") / "replica-response.json"
@@ -74,7 +75,8 @@ def _digest_for(baseline_id: str, records: list[dict[str, Any]], worker_hash: st
                 routing_hash: str = "") -> str:
     """Compute an order-independent generation identity."""
     return digest(canonical({"baselineId": baseline_id, "recordIds": sorted(item["id"] for item in records),
-                             "workerHash": worker_hash, "routingHash": routing_hash}))
+                             "workerHash": worker_hash, "routingHash": routing_hash,
+                             "readProjectionVersion": READ_PROJECTION_VERSION}))
 
 
 def _copy_baseline(stage: Path, manifest: dict[str, Any]) -> None:
@@ -222,6 +224,7 @@ def _build_generation(config: dict[str, Any], baseline: dict[str, Any], records:
         _copy_baseline(stage, baseline)
         value = materialize(str(stage), records) if materialize else _invoke_materializer(config, stage, records)
         response = _validate_materialize_result(value)
+        write_reviewed_claims_projection(stage, records, response["conflicts"], generation_id)
         save_json(stage / RESPONSE_FILE, response)
         seal_generation(stage, generation_id)
         os.replace(stage, final)

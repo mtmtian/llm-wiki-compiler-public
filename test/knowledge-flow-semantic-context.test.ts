@@ -86,6 +86,15 @@ function semanticPage(slug: string, sourceProjectIds: string[], text: string): P
     text, source: text.replace(/\s+/g, " ") };
 }
 
+/** Use the real store and sources for both cross-project gate scenarios. */
+async function semanticPageReferences(page: PageSeed, prompt: string): Promise<string[]> {
+  const root = await semanticRoot();
+  await seedPages(root, [page]);
+  await seedEmbeddings(root, [page], page.slug);
+  const result = await buildTaskContext({ root, projectId: "project-a", scope: "semantic", prompt });
+  return result.evidence.map(item => item.origin === "ledger" ? `claim:${item.claimRef}` : item.pageId);
+}
+
 describe("semantic knowledge context", () => {
   it("Given a synonym query from A, When searching semantic scope, Then returns B's cited decision and source", async () => {
     const root = await semanticRoot();
@@ -196,12 +205,7 @@ describe("cross-project semantic gate", () => {
     "THIN_DECISION: retain data during updates."), heading: "玩家" });
 
   async function runThin(sourceProjects: string[], prompt = THIN_PROMPT): Promise<string[]> {
-    const root = await semanticRoot();
-    const page = thinPage(sourceProjects);
-    await seedPages(root, [page]);
-    await seedEmbeddings(root, [page], page.slug);
-    const result = await buildTaskContext({ root, projectId: "project-a", scope: "semantic", prompt });
-    return result.evidence.map(item => item.pageId);
+    return semanticPageReferences(thinPage(sourceProjects), prompt);
   }
 
   it("Given another project's page at semantic 1.0 matching one query word, When searching, Then it is not injected", async () => {
@@ -222,12 +226,8 @@ describe("cross-project domain-term gate", () => {
   const DOMAIN_PAGE_TEXT = "玩家存档与账号数据在更新中保留。";
 
   async function runPage(text: string, sourceProjects: string[], prompt: string): Promise<string[]> {
-    const root = await semanticRoot();
     const page = { ...semanticPage("domain-gate", sourceProjects, text), heading: "流程" };
-    await seedPages(root, [page]);
-    await seedEmbeddings(root, [page], page.slug);
-    const result = await buildTaskContext({ root, projectId: "project-a", scope: "semantic", prompt });
-    return result.evidence.map(item => item.pageId);
+    return semanticPageReferences(page, prompt);
   }
 
   it("Given another project's page matching only workflow words, When asking to merge and deploy, Then it is not injected", async () => {

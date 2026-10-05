@@ -1,4 +1,4 @@
-"""Given/When/Then coverage for the per-project decision digest and its hook delivery."""
+"""Given/When/Then coverage for diagnostic digests and unified hook retrieval."""
 
 import json
 import tempfile
@@ -104,23 +104,23 @@ class DecisionDeliveryTests(DigestFixture):
             result = hooks.handle({**self.event, "turn_id": turn}, self.config)
         return result["hookSpecificOutput"]["additionalContext"]
 
-    def test_prompt_delivers_digest_once_and_again_after_it_changes(self):
-        """Given a routed session, When decisions are unchanged, Then the digest is not repeated."""
+    def test_prompt_does_not_append_project_digest_to_task_retrieval(self):
+        """Given a project digest exists, When routed retrieval runs, Then only task-ranked context is injected."""
         self.publish(1, "2026-09-20T00:00:00Z", [claim("旧规则")])
-        self.assertTrue(self.ask("t1").startswith("以下是【增长】"))
+        self.assertEqual(self.ask("t1"), "检索结果")
         self.assertEqual(self.ask("t2"), "检索结果")
         self.publish(2, "2026-09-24T00:00:00Z", [claim("新规则")])
-        self.assertIn("新规则", self.ask("t3"))
+        self.assertEqual(self.ask("t3"), "检索结果")
 
-    def test_compaction_restates_digest_on_the_next_prompt(self):
-        """Given a delivered digest, When the context compacts, Then the next routed prompt restates it."""
+    def test_compaction_retrieves_only_unified_task_context(self):
+        """Given a project digest exists, When compact retrieval resumes, Then it returns only worker output."""
         self.publish(1, "2026-09-20T00:00:00Z", [claim("旧规则")])
-        self.ask("t1")
+        self.assertEqual(self.ask("t1"), "检索结果")
         compact = {"hook_event_name": "SessionStart", "source": "compact", "session_id": "s1",
                    "cwd": str(self.workspace)}
         with patch.object(hooks, "invoke", return_value={"context": "", "seen": {}, "status": "ok"}):
             hooks.handle(compact, self.config)
-        self.assertIn("旧规则", self.ask("t2"))
+        self.assertEqual(self.ask("t2"), "检索结果")
 
 
 if __name__ == "__main__":
