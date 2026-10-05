@@ -30,7 +30,7 @@ async function fixture(): Promise<{ root: string; config: FlowConfig; job: FlowJ
   await mkdir(path.join(root, "wiki", "concepts"), { recursive: true });
   const text = "保留项目决策";
   const job: FlowJob = { id: "job-1", projectId: "work/project", projectLabel: "Project", sessionId: "s1", turnId: "t1", cwd: root, createdAt: "2026-09-14T12:00:00.000Z", prompt: "完成项目决策", lastAssistant: "已完成", evidence: [{ id: "e1", kind: "user", text, locator: "turn:t1", sha256: createHash("sha256").update(text).digest("hex"), observedAt: "2026-09-14T12:00:00.000Z" }], allowedPageIds: [] };
-  return { root, job, config: { wikiRoot: root, stateDir: path.join(root, "state"), model: "gpt-5.6-luna", maxProposals: 5, maxPendingPerProject: 10, provider: fakeProvider, reviewer: fakeProvider } };
+  return { root, job, config: { wikiRoot: root, stateDir: path.join(root, "state"), model: "gpt-6-luna", maxProposals: 5, maxPendingPerProject: 10, provider: fakeProvider, reviewer: fakeProvider } };
 }
 
 async function seedPage(root: string, slug: string, body = "旧页面内容足够长用于验证更新"):
