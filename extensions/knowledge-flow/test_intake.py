@@ -33,9 +33,10 @@ class AutomaticIntakeTests(unittest.TestCase):
         return stop
 
     def test_normal_business_turn_is_queued_without_inline_model(self):
-        with patch.object(hooks, "invoke") as invoke:
+        with patch.object(hooks, "invoke", return_value={"context": "", "seen": {}, "status": "no-hit",
+                                                          "references": [], "complete": True}) as invoke:
             stop = self.submit("同龄 cohort 能减少观察窗口差异造成的偏差；下一轮比较需先对齐观察天数。")
-            invoke.assert_not_called()
+            self.assertTrue(all(call.args[1] == "context" for call in invoke.call_args_list))
             hooks.handle(stop, self.config)
         files = list((self.root / "queue").glob("*.json"))
         self.assertEqual(len(files), 1)
@@ -47,9 +48,10 @@ class AutomaticIntakeTests(unittest.TestCase):
     def test_unrelated_turn_and_ambiguous_platform_do_not_enter_queue(self):
         for prompt in ("今天天气如何", "ProductX 投放怎么比较"):
             self.event["prompt"] = prompt
-            with patch.object(hooks, "invoke") as invoke:
+            with patch.object(hooks, "invoke", return_value={"context": "", "seen": {}, "status": "no-hit",
+                                                              "references": [], "complete": True}) as invoke:
                 self.submit("这是一段有长度但不应绕过项目隔离的助手输出。")
-                invoke.assert_not_called()
+                self.assertTrue(all(call.args[1] == "context" for call in invoke.call_args_list))
         self.assertFalse((self.root / "queue").exists())
 
     def test_acknowledgement_instructions_do_not_queue_model_work(self):

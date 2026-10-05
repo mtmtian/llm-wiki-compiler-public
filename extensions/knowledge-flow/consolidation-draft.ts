@@ -4,14 +4,13 @@ import { authorityViolation } from "./authority-policy.js";
 import { parseFrontmatter } from "../../src/utils/markdown.js";
 import { diagnoseClaims, formatClaimDiagnostics } from "./extract.js";
 import type { FlowClaim, FlowEvidence, FlowJob } from "./types.js";
-import { MAX_TOPIC_BODY_CHARS } from "./consolidation-plan.js";
 import type { PlannedPage } from "./consolidation-plan.js";
 import type { TopicRevision } from "./topic-revision-types.js";
 import { validateCitationChanges, validateRetirementReferences } from "./citation-retirement.js";
 import type { CitationRetirement } from "./citation-retirement.js";
 import { resolveQuote } from "./consolidation-quotes.js";
 import type { CorrectionEvidence } from "./consolidation-quotes.js";
-import { pageParagraphs, unexpandedPlaceholder } from "./kept-paragraphs.js";
+import { pageParagraphs, topicPageBodyBudget, unexpandedPlaceholder } from "./kept-paragraphs.js";
 
 export interface TopicDraft {
   claims: FlowClaim[];
@@ -157,7 +156,9 @@ const draftAuthorityMessages = {
 } as const;
 
 function validateEdit(edit: TopicDraft["pages"][number], page: PlannedPage, claims: FlowClaim[], seen: Set<number>): void {
-  if (!edit.claimIndexes.length || edit.body.trimStart().startsWith("---") || edit.body.length > MAX_TOPIC_BODY_CHARS) throw new Error("invalid topic body");
+  if (!edit.claimIndexes.length) throw new Error(`topic page ${page.pageId} has no claim indexes`);
+  if (edit.body.trimStart().startsWith("---")) throw new Error(`topic page ${page.pageId} must not include frontmatter`);
+  validateBodyBudget(page.pageId, parseFrontmatter(edit.body).body.length);
   for (const index of edit.claimIndexes) {
     const claim = claims[index];
     if (seen.has(index) || !belongsToPage(claim, page)) throw new Error("claim topic ownership mismatch");
@@ -165,6 +166,13 @@ function validateEdit(edit: TopicDraft["pages"][number], page: PlannedPage, clai
     seen.add(index);
   }
   validateCitationMarkers(edit, page.original);
+}
+
+function validateBodyBudget(pageId: string, expandedBodyChars: number): void {
+  const budget = topicPageBodyBudget(pageId, expandedBodyChars);
+  if (budget.additionalAvailableChars >= 0) return;
+  throw new Error(`topic page ${pageId} body exceeds limit after keep expansion: ${expandedBodyChars}/${budget.maximumBodyChars} characters `
+    + `(${Math.abs(budget.additionalAvailableChars)} over); compress repeated prose on this page while preserving supported information and existing citations.`);
 }
 
 function belongsToPage(claim: FlowClaim | undefined, page: PlannedPage): boolean {

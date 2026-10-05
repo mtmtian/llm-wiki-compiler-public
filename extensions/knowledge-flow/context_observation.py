@@ -16,6 +16,11 @@ from typing import Any
 
 from common import digest, load_json, safe_text, save_json
 
+CLAIM_REFERENCE = re.compile(r"[0-9a-f]{64}:(?:0|[1-9]\d*)")
+RECORD_REVISION = re.compile(r"[0-9a-f]{64}")
+CITATION_MARKER = re.compile(r"\^\[[^\]\r\n]+\]")
+CLAIM_MARKER = re.compile(r"(?<![\w])\[claim:([0-9a-f]{64}:(?:0|[1-9]\d*))\](?![\w])")
+
 
 def _diagnostic_turn_id(event: dict[str, Any]) -> str | None:
     """Lifecycle replays stay outside turn counts even if the host supplies a turn ID."""
@@ -33,13 +38,29 @@ def diagnostic_path(config: dict[str, Any], event: dict[str, Any], reason: str) 
 
 
 def _reference_hashes(references: list[dict[str, Any]]) -> list[str]:
-    """Hash source locators so maintenance data never retains citation text."""
+    """Hash either legacy page or immutable ledger-claim identities without retaining them."""
     values = []
     for reference in references:
-        encoded = json.dumps([reference["pageId"], reference["pageRevision"], reference["citations"]],
-                             ensure_ascii=False, separators=(",", ":"))
+        identity = _reference_identity(reference)
+        if identity is None:
+            continue
+        citations = reference.get("citations", [])
+        citations = [item for item in citations if isinstance(item, str)] if isinstance(citations, list) else []
+        encoded = json.dumps([*identity, citations], ensure_ascii=False, separators=(",", ":"))
         values.append(digest(encoded))
     return list(dict.fromkeys(values))
+
+
+def _reference_identity(reference: dict[str, Any]) -> list[str] | None:
+    """Return a stable identity tuple for either supported context reference shape."""
+    page_id, page_revision = reference.get("pageId"), reference.get("pageRevision")
+    if isinstance(page_id, str) and isinstance(page_revision, str):
+        return ["page", page_id, page_revision]
+    claim_ref, record_revision = reference.get("claimRef"), reference.get("recordRevision")
+    if (isinstance(claim_ref, str) and CLAIM_REFERENCE.fullmatch(claim_ref)
+            and isinstance(record_revision, str) and RECORD_REVISION.fullmatch(record_revision)):
+        return ["claim", claim_ref, record_revision]
+    return None
 
 
 def write_diagnostic(config: dict[str, Any], event: dict[str, Any], project: str | None,
@@ -130,10 +151,17 @@ def record_stop_observation(config: dict[str, Any], event: dict[str, Any]) -> No
 
 
 def _references_match(text: str, reference: dict[str, Any]) -> bool:
-    """Require an exact citation marker or a page ID with path boundaries."""
+    """Require an exact citation, bracketed or raw claim reference, or legacy page ID token."""
     citations = reference.get("citations", [])
-    if isinstance(citations, list) and any(isinstance(item, str) and item and item in text for item in citations):
+    visible_citations = set(CITATION_MARKER.findall(text))
+    if isinstance(citations, list) and any(isinstance(item, str) and item in visible_citations for item in citations):
         return True
+    claim_ref = reference.get("claimRef")
+    if isinstance(claim_ref, str) and CLAIM_REFERENCE.fullmatch(claim_ref):
+        if claim_ref in CLAIM_MARKER.findall(text):
+            return True
+        pattern = r"(?<![\w:])" + re.escape(claim_ref) + r"(?![\w:])"
+        return re.search(pattern, text) is not None
     page_id = reference.get("pageId")
     if not isinstance(page_id, str) or not page_id:
         return False

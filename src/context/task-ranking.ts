@@ -32,8 +32,14 @@ const CROSS_PROJECT_SEMANTIC_MINIMUM = 0.6;
 const MIN_CROSS_PROJECT_COVERAGE = 0.5;
 const RRF_OFFSET = 60;
 const HEADING_WEIGHT = 3;
-interface Candidate {
-  section: DecisionSection; lexical: number; semantic: number; coverage: number;
+/** A real page section or reviewed claim supplies relevance fields without pretending to be another storage type. */
+export interface TaskCandidate<T> {
+  id: string; title: string; heading: string; text: string; topic: string; decisionObject: string;
+  sourceProjectIds: string[]; temporalStatus: DecisionSection["temporalStatus"];
+  semanticScore: number; semanticAvailable: boolean; value: T;
+}
+interface Candidate<T> {
+  section: TaskCandidate<T>; lexical: number; semantic: number; coverage: number;
   matches: number; domainMatches: number; headingMatch: boolean;
 }
 
@@ -43,26 +49,43 @@ interface Candidate {
  */
 export function rankTaskSections(sections: DecisionSection[], prompt: string, hits: SemanticChunkHit[],
   currentProjectId?: string): DecisionSection[] {
+  return rankTaskCandidates(sections.map(section => taskSectionCandidate(section, hits)), prompt, currentProjectId)
+    .map(candidate => ({ ...candidate.value, score: candidate.score }));
+}
+
+/** Preserve the existing page semantic lane while allowing claims to share the same lexical gates and budget. */
+export function taskSectionCandidate(section: DecisionSection, hits: SemanticChunkHit[]): TaskCandidate<DecisionSection> {
+  return { id: section.page.id, title: section.page.title, heading: section.heading, text: section.text,
+    topic: String(section.page.frontmatter.knowledgeTopic ?? ""),
+    decisionObject: String(section.page.frontmatter.knowledgeDecisionObject ?? ""),
+    sourceProjectIds: sourceProjectIds(section.page.frontmatter), temporalStatus: section.temporalStatus,
+    semanticScore: Math.max(0, ...hits.filter(hit => hit.pageId === section.page.id && Number.isFinite(hit.score)
+      && overlaps(section.text, hit.text)).map(hit => hit.score)), semanticAvailable: hits.length > 0, value: section };
+}
+
+/** Qualifications establish applicability, never relevance; all origins compete in one ranked list. */
+export function rankTaskCandidates<T>(sections: TaskCandidate<T>[], prompt: string,
+  currentProjectId?: string): Array<TaskCandidate<T> & { score: number }> {
   const terms = queryTerms(prompt);
   if (!terms.length || (currentProjectId && terms.length < MIN_QUERY_TERMS)) return [];
   const intent = taskTemporalIntent(prompt);
   const pool = sections.filter(section => intent !== "current" || section.temporalStatus !== "historical");
   const weights = termWeights(pool, terms);
-  const candidates = pool.map(section => scoreSection(section, weights, hits));
-  const eligible = candidates.filter(candidate => admitted(candidate, terms.length, currentProjectId, hits.length > 0));
+  const candidates = pool.map(section => scoreSection(section, weights));
+  const eligible = candidates.filter(candidate => admitted(candidate, terms.length, currentProjectId));
   const lexicalCandidates = eligible.filter(candidate => lexicalMatch(candidate, terms.length));
   const bestLexical = Math.max(0, ...lexicalCandidates.map(candidate => candidate.lexical));
   const lexical = lexicalCandidates.filter(candidate => candidate.lexical >= bestLexical * MIN_RELATIVE_LEXICAL_SCORE)
     .sort((a, b) => b.lexical - a.lexical);
   const semantic = eligible.filter(candidate => candidate.semantic >= SEMANTIC_SUPPORT_MINIMUM)
     .sort((a, b) => b.semantic - a.semantic);
-  const fused = new Map<DecisionSection, number>();
+  const fused = new Map<TaskCandidate<T>, number>();
   for (const arm of [lexical, semantic]) arm.forEach((candidate, rank) => {
     fused.set(candidate.section, (fused.get(candidate.section) ?? 0) + 1 / (RRF_OFFSET + rank + 1));
   });
   return [...fused].map(([section, score]) => ({ ...section, score })).sort((a, b) =>
     b.score - a.score || historyPreference(b, intent) - historyPreference(a, intent)
-    || a.page.id.localeCompare(b.page.id) || a.heading.localeCompare(b.heading));
+    || a.id.localeCompare(b.id) || a.heading.localeCompare(b.heading));
 }
 
 /** Do not let single Han characters or English substrings such as CI inside precision create false hits. */
@@ -81,18 +104,18 @@ function matches(text: string, term: string): boolean {
 }
 
 /** Topic metadata supplies context even when a page omits its H1 heading. */
-function sectionText(section: DecisionSection): string {
-  return clean(`${section.page.title}\n${section.heading}\n${section.text}\n${section.page.frontmatter.knowledgeTopic ?? ""}\n${section.page.frontmatter.knowledgeDecisionObject ?? ""}`);
+function sectionText(section: TaskCandidate<unknown>): string {
+  return clean(`${section.title}\n${section.heading}\n${section.text}\n${section.topic}\n${section.decisionObject}`);
 }
 
 /** Unmatched query terms stay in the denominator: relative rank alone cannot justify injection. */
-function termWeights(sections: DecisionSection[], terms: string[]): Map<string, number> {
+function termWeights(sections: TaskCandidate<unknown>[], terms: string[]): Map<string, number> {
   const texts = sections.map(sectionText);
   return new Map(terms.map(term => [term, 1 + Math.log((texts.length + 1) / (1 + texts.filter(text => matches(text, term)).length))]));
 }
 
 /** Keep term coverage separate from heading boosts so generic headings cannot force inclusion. */
-function scoreSection(section: DecisionSection, weights: Map<string, number>, hits: SemanticChunkHit[]): Candidate {
+function scoreSection<T>(section: TaskCandidate<T>, weights: Map<string, number>): Candidate<T> {
   const text = sectionText(section);
   const heading = clean(section.heading.split(" / ").at(-1) ?? "");
   const localText = `${heading}\n${clean(section.text)}`;
@@ -107,13 +130,12 @@ function scoreSection(section: DecisionSection, weights: Map<string, number>, hi
     headingMatch ||= inHeading;
     lexical += weighted;
   }
-  const semantic = Math.max(0, ...hits.filter(hit => hit.pageId === section.page.id && Number.isFinite(hit.score)
-    && overlaps(section.text, hit.text)).map(hit => hit.score));
+  const semantic = section.semanticScore;
   return { section, lexical, semantic, coverage: total ? matched / total : 0, matches: count, domainMatches: domainCount, headingMatch };
 }
 
 /** Short topical questions can match one heading; broad body overlap needs multiple query terms. */
-function lexicalMatch(candidate: Candidate, terms: number): boolean {
+function lexicalMatch(candidate: Candidate<unknown>, terms: number): boolean {
   return candidate.coverage >= MIN_QUERY_COVERAGE && (candidate.headingMatch || candidate.matches >= Math.min(2, terms));
 }
 
@@ -121,25 +143,24 @@ function lexicalMatch(candidate: Candidate, terms: number): boolean {
  * A strong semantic hit qualifies the current project's pages on its own. Another project's page never skips
  * the cross-project gate, because a high embedding score alone is how loosely related pages leaked in.
  */
-function admitted(candidate: Candidate, terms: number, currentProjectId: string | undefined,
-  semanticAvailable: boolean): boolean {
+function admitted(candidate: Candidate<unknown>, terms: number, currentProjectId: string | undefined): boolean {
   const isLocal = !currentProjectId || belongsTo(candidate.section, currentProjectId);
   if (isLocal && candidate.semantic >= SEMANTIC_ONLY_MINIMUM) return true;
   if (!lexicalMatch(candidate, terms)) return false;
   if (isLocal) return true;
   if (candidate.domainMatches < MIN_CROSS_PROJECT_TERMS) return false;
-  return semanticAvailable ? candidate.semantic >= CROSS_PROJECT_SEMANTIC_MINIMUM
+  return candidate.section.semanticAvailable ? candidate.semantic >= CROSS_PROJECT_SEMANTIC_MINIMUM
     : candidate.coverage >= MIN_CROSS_PROJECT_COVERAGE;
 }
 
 /** Pages without ownership metadata are treated as local so legacy pages keep their prior ranking. */
-function belongsTo(section: DecisionSection, projectId: string): boolean {
-  const sources = sourceProjectIds(section.page.frontmatter);
+function belongsTo(section: TaskCandidate<unknown>, projectId: string): boolean {
+  const sources = section.sourceProjectIds;
   return !sources.length || sources.includes(projectId);
 }
 
 /** Historical questions may still need an unlabelled rationale, so prefer rather than exclude. */
-function historyPreference(section: DecisionSection, intent: string): number {
+function historyPreference(section: TaskCandidate<unknown>, intent: string): number {
   return Number(intent === "historical" && section.temporalStatus === "historical");
 }
 

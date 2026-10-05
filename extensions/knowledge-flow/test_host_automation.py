@@ -55,9 +55,10 @@ class HostAutomationTests(unittest.TestCase):
                       "hook_event_name": "UserPromptSubmit"}
 
     def submit(self, prompt, assistant="[]", supplied=None, omit_prompt=False):
-        """Drive the real prompt/Stop events without invoking a worker."""
+        """Drive real prompt/Stop events with read-only context and no generation worker."""
         event = {**self.event, "prompt": prompt}
-        with patch.object(hooks, "invoke") as invoke:
+        with patch.object(hooks, "invoke", return_value={"context": "", "seen": {}, "status": "no-hit",
+                                                          "references": [], "complete": True}) as invoke:
             hooks.handle(event, self.config)
             stop = {**event, "hook_event_name": "Stop", "last_assistant_message": assistant}
             if omit_prompt:
@@ -65,7 +66,7 @@ class HostAutomationTests(unittest.TestCase):
             if supplied is not None:
                 stop["conversation_evidence"] = supplied
             hooks.handle(stop, self.config)
-            invoke.assert_not_called()
+            self.assertTrue(all(call.args[1] == "context" for call in invoke.call_args_list))
         return hooks.event_path(self.config, event).name
 
     def test_templates_complete_before_queue_capacity_or_artifact_bypass(self):

@@ -19,7 +19,6 @@ from admission_usage import intake_lock, runnable_capacity_reason
 from common import (config_from, digest, inside, is_excluded_artifact_path, load_json,
                     page_ids, read_operational_context, safe_text, save_json)
 from hook_context import prepare_context
-from current_decisions import current_decisions
 from context_observation import (promote_prepared_context, record_stop_observation,
                                 save_prepared_context, write_diagnostic)
 from operational_context import operational_context
@@ -59,29 +58,12 @@ def read_context_event(event, config, project, reason, prompt, session):
     result = prepare_context(config, project, prompt, allowed, session.get("seen", {}), invoke,
                              operational_context(config, prompt))
     write_diagnostic(config, event, project, reason, result, prompt)
-    decisions = unseen_decisions(config, project, session)
     save_prepared_context(config, event, session, project, prompt, result)
-    text = decisions + result.get("context", "")
+    text = result.get("context", "")
     if not text:
         return {}
     return {"hookSpecificOutput": {"hookEventName": event.get("hook_event_name", "UserPromptSubmit"),
                                     "additionalContext": text}}
-
-
-def unseen_decisions(config, project, session):
-    """Return the project's decision digest once per session and again whenever it changes.
-
-    Records the delivered fingerprint in ``session["decisionsSeen"]``; the caller
-    persists that dict (``save_prepared_context`` writes the whole session).
-    """
-    if not project:
-        return ""
-    text, fingerprint = current_decisions(config, project)
-    seen = session.get("decisionsSeen") if isinstance(session.get("decisionsSeen"), dict) else {}
-    if not text or seen.get(project) == fingerprint:
-        return ""
-    session["decisionsSeen"] = {**seen, project: fingerprint}
-    return text
 
 
 def session_start_event(event, config):
@@ -95,7 +77,7 @@ def session_start_event(event, config):
         return {}
     session = load_json(path, {})
     if session.pop("decisionsSeen", None) is not None:
-        # Compaction drops earlier injected text, so the next routed prompt restates the digest.
+        # Remove the obsolete digest cursor; restored context now comes from scoped task retrieval.
         save_json(path, session)
     project, prompt = session.get("readProjectId"), safe_text(session.get("readPrompt"), 12000)
     if not project or not prompt:

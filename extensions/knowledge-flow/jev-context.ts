@@ -16,7 +16,10 @@ function rankedPack(pack: TaskContext, scores: Scores[]): TaskContext {
   const removed = evidence.length < pack.evidence.length;
   return { ...pack, evidence, complete: pack.complete && !removed,
     status: !evidence.length && pack.status === "ok" ? "no-hit" : pack.status,
-    followUpPageIds: removed ? [...new Set([...pack.followUpPageIds, ...pack.evidence.map(item => item.pageId)])] : pack.followUpPageIds };
+    followUpPageIds: removed ? [...new Set([...pack.followUpPageIds, ...pack.evidence.flatMap(item => item.origin === "ledger" ? [] : [item.pageId])])] : pack.followUpPageIds,
+    ...(pack.followUpClaimRefs || pack.evidence.some(item => item.origin === "ledger") ? { followUpClaimRefs: removed
+      ? [...new Set([...(pack.followUpClaimRefs ?? []), ...pack.evidence.flatMap(item => item.origin === "ledger" ? [item.claimRef] : [])])]
+      : pack.followUpClaimRefs } : {}) };
 }
 
 /** Externally callable seam: disabled/offline/exhausted behavior is independent of the transport. */

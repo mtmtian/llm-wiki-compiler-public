@@ -77,7 +77,12 @@ export const editSystem = DURABLE_KNOWLEDGE_POLICY + taskContextContract + EVIDE
   "An existing page arrives as originalParagraphs, each with a keep placeholder such as {{keep:P3}}: to keep a paragraph exactly, write its placeholder " +
   "alone on its own line, and the program restores the original text with all its citation markers. Keep every paragraph that needs no change this way " +
   "instead of copying, condensing or paraphrasing it, and rewrite only paragraphs whose content changes. Use a page's placeholders only in that page's body, " +
-  "each at most once, in any order. " +
+  "each at most once, in any order. Body budgets are listed in pageBodyBudgets for every destination: currentBodyChars is the actual body length " +
+  "after parseFrontmatter, maximumBodyChars is the limit, and additionalAvailableChars is the remaining space when the original body is kept. " +
+  "Keep placeholders count as their full restored paragraphs, never as their short token text; the final body after placeholder expansion must fit " +
+  "maximumBodyChars. If a kept page plus new prose would exceed its budget, rewrite and compress repeated prose on that same page while preserving " +
+  "all supported durable information and every existing citation marker. Keep each exact marker in the page or use only the explicit reviewed citation " +
+  "retirement procedure. Do not split a topic, create another page, or drop citations just to fit the limit. " +
   "If all planned destinations already cover the evidence and need no durable change, return claims=[] and keep every existing page unchanged with " +
   "claimIndexes=[] and no citation retirements. Explain why in summary; independent review will check that no required knowledge is omitted. " +
   "priorSources contains original files cited by existing pages: use it to verify retained history, never invent new evidence IDs from it. " +

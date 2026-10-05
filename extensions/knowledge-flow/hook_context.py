@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from common import safe_text
@@ -13,6 +14,8 @@ MAX_OPERATIONAL_CHARS = 1000
 OPERATIONAL_PREFIX = "Wiki当前运维状态\n"
 MAX_REFERENCES = 128
 MAX_REFERENCE_TEXT = 512
+CLAIM_REFERENCE = re.compile(r"[0-9a-f]{64}:(?:0|[1-9]\d*)")
+RECORD_REVISION = re.compile(r"[0-9a-f]{64}")
 
 
 def _limit(config: dict[str, Any]) -> int:
@@ -36,7 +39,7 @@ def _failure(project: str, error: Exception, limit: int, operation: str) -> dict
 
 
 def _references(value: Any) -> list[dict[str, Any]]:
-    """Keep only bounded source identifiers and exact citation markers."""
+    """Keep bounded legacy page and immutable ledger-claim references."""
     if not isinstance(value, list) or len(value) > MAX_REFERENCES:
         return []
     result = []
@@ -44,15 +47,19 @@ def _references(value: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         page_id, revision = item.get("pageId"), item.get("pageRevision")
+        claim_ref, record_revision = item.get("claimRef"), item.get("recordRevision")
         citations = item.get("citations")
-        if not isinstance(page_id, str) or not page_id or len(page_id) > MAX_REFERENCE_TEXT:
-            continue
-        if not isinstance(revision, str) or len(revision) > MAX_REFERENCE_TEXT:
+        if isinstance(page_id, str) and page_id and len(page_id) <= MAX_REFERENCE_TEXT \
+                and isinstance(revision, str) and len(revision) <= MAX_REFERENCE_TEXT:
+            identity = {"pageId": page_id, "pageRevision": revision}
+        elif (isinstance(claim_ref, str) and CLAIM_REFERENCE.fullmatch(claim_ref)
+              and isinstance(record_revision, str) and RECORD_REVISION.fullmatch(record_revision)):
+            identity = {"claimRef": claim_ref, "recordRevision": record_revision}
+        else:
             continue
         markers = [marker for marker in citations if isinstance(marker, str) and marker
                    and len(marker) <= MAX_REFERENCE_TEXT] if isinstance(citations, list) else []
-        result.append({"pageId": page_id, "pageRevision": revision,
-                       "citations": list(dict.fromkeys(markers))})
+        result.append({**identity, "citations": list(dict.fromkeys(markers))})
     return result
 
 
@@ -85,7 +92,7 @@ def prepare_context(config: dict[str, Any], project: str, prompt: str,
     prefix = OPERATIONAL_PREFIX if operation else ""
     operation = (prefix + operation + ("\n" if operation else ""))[:limit]
     budget = max(0, limit - len(operation))
-    if not project or not allowed:
+    if not project:
         return {"context": operation, "seen": {}, "prepared": False, "preparedCount": 0,
                 "references": [], "referencesTracked": False,
                 "status": "no-scope", "complete": bool(operation), "diagnostics": {}}

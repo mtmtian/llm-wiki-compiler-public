@@ -22,7 +22,7 @@ import { priorSourceContext } from "./consolidation-sources.js";
 import { validateRetirementReferences } from "./citation-retirement.js";
 import { citationChecklist, unaccountedCitations, withRepairedCitations } from "./citation-repair.js";
 import { withoutRejectedClaims } from "./claim-pruning.js";
-import { editablePages, pagePublishedAt, withKeptParagraphs } from "./kept-paragraphs.js";
+import { editablePages, pageBodyBudgets, pagePublishedAt, withKeptParagraphs } from "./kept-paragraphs.js";
 
 // Durable stage name of the review that checks a draft restricted to its accepted claims.
 const PRUNED_STAGE = "pruned";
@@ -249,7 +249,8 @@ function draftPrompt(run: EditRunContext, stage: string | undefined,
   return JSON.stringify({ projectId: run.job.projectId, sourceProjectId: run.job.projectId,
     ...(run.job.topicScope ? { topicScope: run.job.topicScope } : {}), currentTaskContext: run.job.prompt,
     sessionContext: run.job.sessionContext?.summary, plan: run.topic.plan,
-    pages: editablePages(run.topic.pages), priorSources: run.topic.priorSources, evidence: run.correctionCatalog,
+    pages: editablePages(run.topic.pages), pageBodyBudgets: pageBodyBudgets(run.topic.pages),
+    priorSources: run.topic.priorSources, evidence: run.correctionCatalog,
     maxClaims: run.config.maxProposals,
     citationChecklist: citationChecklist(run.topic.pages),
     quoteSelection: "Choose quoteId values from the frozen quoteOptions; do not write source quote text.",

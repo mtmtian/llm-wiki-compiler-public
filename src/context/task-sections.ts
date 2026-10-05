@@ -48,7 +48,12 @@ function pageSections(page: ViewerPage): DecisionSection[] {
 /** Semantic hits guide selection of current body text; all ranking stays within verified scope. */
 export function rankDecisionSections(pages: ViewerPage[], prompt: string, hits: SemanticChunkHit[],
   currentProjectId?: string): DecisionSection[] {
-  return rankTaskSections(pages.flatMap(page => withQualifications(pageSections(page))), prompt, hits, currentProjectId);
+  return rankTaskSections(decisionSections(pages), prompt, hits, currentProjectId);
+}
+
+/** Expose whole qualified sections for the common page-and-claim ranking boundary. */
+export function decisionSections(pages: ViewerPage[]): DecisionSection[] {
+  return pages.flatMap(page => withQualifications(pageSections(page)));
 }
 
 /** Page-level applicability travels with each decision, even without query-word overlap. */

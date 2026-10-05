@@ -89,7 +89,7 @@ async function evaluateCase(root: string, scenario: DecisionReuseCase): Promise<
       ...(scope === "semantic" ? { topicScope: "semantic" as const } : {}) }, projectId: scenario.projectId,
     prompt: scenario.prompt, allowedPageIds, seen: {} };
   const hookContext = await buildHookContext(hookInput);
-  const taskRecords = taskContext.evidence.map(item => ({ pageId: item.pageId, section: item.section }));
+  const taskRecords = taskContext.evidence.map(item => ({ pageId: item.origin === "ledger" ? `claim:${item.claimRef}` : item.pageId, section: item.section }));
   const hookRecords = parseHookEvidence(hookContext.context);
   const expected = scenario.expected.map(identify);
   const forbidden = scenario.forbiddenPageIds ?? [];
