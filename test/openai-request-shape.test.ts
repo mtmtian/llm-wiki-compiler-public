@@ -92,7 +92,7 @@ describe("reasoningParams", () => {
     },
   );
 
-  it.each(["gpt-5", "gpt-5-mini", "gpt-5-pro", "gpt-5.1", "gpt-5.60", "gpt-5.6custom"])(
+  it.each(["gpt-5", "gpt-5-mini", "gpt-5-pro", "gpt-5.1", "gpt-5.60", "gpt-5.6custom", "gpt-6-luna"])(
     "does not impose GPT-5.6 effort semantics on %s",
     model => { expect(reasoningParams(model)).toEqual({}); },
   );

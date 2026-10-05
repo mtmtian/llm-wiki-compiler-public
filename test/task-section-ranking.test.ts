@@ -62,10 +62,15 @@ describe("cross-project task evidence", () => {
     score: 0.7, contentHash: "unrelated-hit" };
   const gamePages = async () => (await buildViewerSnapshot(wiki.value)).pages.filter(page => page.id === GAME_PAGE);
 
-  it("Given another project's page, When one shared word is asked, Then abstains while the owner still retrieves it", async () => {
+  it("Given semantic scope, When one word is asked, Then neither the owner nor another project gets topical retrieval", async () => {
     const pages = await gamePages();
     expect(rankDecisionSections(pages, "宿主", [], "other-project")).toEqual([]);
-    expect(rankDecisionSections(pages, "宿主", [], GAME_PROJECT).map(section => section.heading)).toEqual(["当前语言范围"]);
+    expect(rankDecisionSections(pages, "宿主", [], GAME_PROJECT)).toEqual([]);
+  });
+
+  it("Given project scope, When one word is asked, Then the short topic still retrieves its own section", async () => {
+    const result = rankDecisionSections(await gamePages(), "宿主", []);
+    expect(result.map(section => section.heading)).toEqual(["当前语言范围"]);
   });
 
   it("Given embeddings are available, When another project's page matches only lexically, Then abstains", async () => {
