@@ -15,7 +15,7 @@ from typing import Any
 from ledger import decision_subject, resolve
 from replica_records import LEDGER_VERSION, PUBLICATION_VERSION
 
-READ_PROJECTION_VERSION = 1
+READ_PROJECTION_VERSION = 2
 PROJECTION_PATH = Path(".llmwiki") / "reviewed-claims.json"
 
 
@@ -71,16 +71,46 @@ def _project_claims(payloads: dict[str, dict[str, Any]],
     """Project v3 claims and only the metadata for superseded v2 claims."""
     claims: list[dict[str, Any]] = []
     history: list[dict[str, Any]] = []
+    equivalent_refs = _equivalent_page_refs(payloads, superseded)
     visible = [(record_id, payload) for record_id, payload in payloads.items()]
     for record_id, payload in sorted(visible, key=_record_order):
         for index, claim in enumerate(payload["claims"]):
             claim_ref = f"{record_id}:{index}"
             item = _claim_item(record_id, payload, index, claim, claim_ref in superseded)
             if payload["version"] == LEDGER_VERSION:
+                item["equivalentPageRefs"] = equivalent_refs.get(_claim_equivalence_key(item), [])
                 claims.append(item)
             elif payload["version"] == PUBLICATION_VERSION and claim_ref in superseded:
                 history.append(item)
     return claims, history
+
+
+def _equivalent_page_refs(payloads: dict[str, dict[str, Any]],
+                          superseded: set[str]) -> dict[tuple[Any, ...], list[str]]:
+    """Index active v2 claims by their exact decision and quoted-source content."""
+    candidates: dict[tuple[Any, ...], list[str]] = {}
+    for record_id, payload in sorted(payloads.items(), key=_record_order):
+        if payload["version"] != PUBLICATION_VERSION:
+            continue
+        for index, claim in enumerate(payload["claims"]):
+            claim_ref = f"{record_id}:{index}"
+            if claim_ref in superseded:
+                continue
+            item = _claim_item(record_id, payload, index, claim, False)
+            key = _claim_equivalence_key(item)
+            candidates.setdefault(key, []).append(item["claimRef"])
+    return {key: sorted(refs) for key, refs in candidates.items()}
+
+
+def _claim_equivalence_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    """Key decision meaning and ordered primary/support evidence, excluding attempt identity."""
+    quote_fields = ("kind", "quote", "locator", "observedAt", "sha256", "originalSha256")
+    quotes = tuple(("primary" if index == 0 else "support",
+                    *(quote.get(field) for field in quote_fields))
+                   for index, quote in enumerate(item["quotes"]))
+    return (item["projectId"], item["topic"], item["decisionObject"], item["text"],
+            item["kind"], item["status"], item["useWhen"], item["rationale"],
+            item["superseded"], quotes)
 
 
 def _record_order(item: tuple[str, dict[str, Any]]) -> tuple[str, str]:
@@ -104,7 +134,7 @@ def _claim_item(record_id: str, payload: dict[str, Any], index: int,
             "kind": claim["kind"], "status": claim["status"],
             "useWhen": claim["useWhen"], "rationale": claim["rationale"],
             "recordedAt": payload["createdAt"], "targetPageId": claim.get("targetPageId"),
-            "superseded": is_superseded, "quotes": quotes}
+            "superseded": is_superseded, "quotes": quotes, "equivalentPageRefs": []}
 
 
 def _quote_items(references: list[tuple[str, str]],

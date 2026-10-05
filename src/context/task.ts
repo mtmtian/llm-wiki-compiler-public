@@ -11,6 +11,7 @@ import type { PageTaskEvidence, TaskContext, TaskContextOptions, TaskEvidence } 
 import { readReviewedClaims } from "./ledger.js";
 import { rankTaskCandidates, taskSectionCandidate, type TaskCandidate } from "./task-ranking.js";
 import { claimCandidate, claimEvidence, scopedClaims, withoutSupersededSections, type TaskSelection } from "./task-claims.js";
+import { duplicateEvidence, duplicateSelection, type SelectedEvidence } from "./task-dedup.js";
 
 const MAX_TASK_PAGES = 3;
 const MAX_TASK_SECTIONS = 6;
@@ -44,8 +45,9 @@ export async function buildTaskContext(options: TaskContextOptions): Promise<Tas
   candidates.push(...claims.map(claimCandidate));
   const ranked = rankTaskCandidates(candidates, options.prompt, crossProjectFrom).map(candidate => candidate.value);
   result.diagnostics.matchedSections = ranked.length;
-  result.evidence = await selectEvidence(root, ranked, result.diagnostics.warnings, options.scope === "semantic");
-  setFollowUp(result, ranked, usable, options);
+  const selected = await selectEvidence(root, ranked, result.diagnostics.warnings, options.scope === "semantic");
+  result.evidence = selected.evidence;
+  setFollowUp(result, selected.selections, usable, options);
   result.status = result.diagnostics.warnings.length ? "degraded" : result.evidence.length ? "ok" : "no-hit";
   return result;
 }
@@ -88,32 +90,42 @@ function noHitPointers(pages: ViewerPage[], options: TaskContextOptions): string
 }
 
 /** Resolve sources from selected sections, not the first citation on the whole page. */
-async function selectEvidence(root: string, selections: TaskSelection[], warnings: string[], semanticScope: boolean): Promise<TaskEvidence[]> {
-  const evidence: TaskEvidence[] = [];
-  const pages = new Set<string>();
-  const budget = createSourceWindowBudget();
-  let remaining = MAX_EVIDENCE_CHARS;
+async function selectEvidence(root: string, selections: TaskSelection[], warnings: string[], semanticScope: boolean) {
+  const selected: SelectedEvidence[] = [];
+  const duplicates = new Set<TaskSelection>();
   for (const selection of selections) {
-    if (evidence.length >= MAX_TASK_SECTIONS) break;
-    const pageId = selection.origin === "page" ? selection.section.page.id : null;
-    if (!withinPageLimit(pageId, pages)) continue;
-    const candidateBudget = { ...budget };
-    const item = await resolveSelectionEvidence(root, selection, candidateBudget, warnings, semanticScope);
-    if (!item) continue;
-    const size = JSON.stringify(item).length;
-    if (size > remaining) continue;
-    if (pageId) pages.add(pageId);
-    evidence.push(item);
-    remaining -= size;
-    budget.remaining = candidateBudget.remaining;
+    if (!canConsider(selection, selected)) continue;
+    const budget = createSourceWindowBudget();
+    budget.remaining -= selected.reduce((total, item) => total + item.evidence.sources.length, 0);
+    const evidence = await resolveSelectionEvidence(root, selection, budget, warnings, semanticScope);
+    if (!evidence) continue;
+    const candidate = { selection, evidence };
+    const previous = selected.find(item => duplicateEvidence(item, candidate));
+    if (previous && evidenceSize(previous.evidence) <= evidenceSize(evidence)) { duplicates.add(selection); continue; }
+    const retained = selected.filter(item => item !== previous);
+    if (!fitsEvidenceBudget([...retained.map(item => item.evidence), evidence])) continue;
+    if (previous) { duplicates.add(previous.selection); selected[selected.indexOf(previous)] = candidate; }
+    else selected.push(candidate);
   }
-  return evidence;
+  return { evidence: selected.map(item => item.evidence), selections: selections.filter(item => !duplicates.has(item)) };
 }
 
-/** Claims do not spend a page slot; several sections from one page spend only one. */
-function withinPageLimit(pageId: string | null, pages: Set<string>): boolean {
-  return !pageId || pages.has(pageId) || pages.size < MAX_TASK_PAGES;
+/** Once full, only an equivalent representation can replace an existing slot. */
+function canConsider(selection: TaskSelection, selected: SelectedEvidence[]): boolean {
+  if (selected.some(item => duplicateSelection(item.selection, selection))) return true;
+  if (selected.length >= MAX_TASK_SECTIONS) return false;
+  const pages = new Set(selected.flatMap(item => item.evidence.origin === "ledger" ? [] : [item.evidence.pageId]));
+  return selection.origin === "ledger" || pages.has(selection.section.page.id) || pages.size < MAX_TASK_PAGES;
 }
+
+/** Recompute the small selected set so replacing a duplicate refunds all of its budgets. */
+function fitsEvidenceBudget(evidence: TaskEvidence[]): boolean {
+  const pages = new Set(evidence.flatMap(item => item.origin === "ledger" ? [] : [item.pageId]));
+  return evidence.length <= MAX_TASK_SECTIONS && pages.size <= MAX_TASK_PAGES
+    && evidence.reduce((total, item) => total + evidenceSize(item), 0) <= MAX_EVIDENCE_CHARS;
+}
+
+function evidenceSize(evidence: TaskEvidence): number { return JSON.stringify(evidence).length; }
 
 /** Each origin resolves through its own provenance boundary before consuming the shared budget. */
 async function resolveSelectionEvidence(root: string, selection: TaskSelection,

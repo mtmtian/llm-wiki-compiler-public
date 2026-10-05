@@ -12,7 +12,7 @@ export function reviewedClaim(overrides: Record<string, unknown> = {}) {
   return { claimRef: CLAIM_REF, recordId: CLAIM_RECORD, projectId: "sample-game", projectLabel: "Sample Game",
     title: "存档保留", topic: "小游戏存档", decisionObject: "更新与存档", text: CLAIM_TEXT,
     kind: "constraint", status: "decided", useWhen: "仅适用于样例小游戏更新", rationale: "避免玩家进度丢失",
-    recordedAt: "2026-09-01T00:00:00Z", targetPageId: null, superseded: false,
+    recordedAt: "2026-09-01T00:00:00Z", targetPageId: null, superseded: false, equivalentPageRefs: [],
     quotes: [{ evidenceId: "user-1", kind: "user", quote: CLAIM_TEXT, locator: "turn:synthetic-1",
       observedAt: "2026-09-01T00:00:00Z", sha256: createHash("sha256").update(CLAIM_TEXT).digest("hex") }],
     ...overrides };
@@ -22,7 +22,7 @@ export function reviewedClaim(overrides: Record<string, unknown> = {}) {
 export async function writeReviewedClaims(root: string, claims = [reviewedClaim()], superseded: unknown[] = []) {
   await mkdir(path.join(root, ".llmwiki"), { recursive: true });
   const generationId = path.basename(root);
-  const bytes = JSON.stringify({ version: 1, generationId, claims, superseded, rejectedRecordIds: [] });
+  const bytes = JSON.stringify({ version: 2, generationId, claims, superseded, rejectedRecordIds: [] });
   await writeFile(path.join(root, ".llmwiki/reviewed-claims.json"), bytes);
   await writeFile(path.join(root, ".llmwiki/projection-manifest.json"), JSON.stringify({
     version: 2, generationId, responseSha256: "0".repeat(64), files: [],

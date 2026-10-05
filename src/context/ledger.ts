@@ -8,15 +8,16 @@ const PROJECTION = ".llmwiki/reviewed-claims.json";
 const MANIFEST = ".llmwiki/projection-manifest.json";
 const MAX_PROJECTION_BYTES = 32 * 1024 * 1024;
 const hash = z.string().regex(/^[0-9a-f]{64}$/);
+const claimReference = z.string().regex(/^[0-9a-f]{64}:(?:0|[1-9]\d*)$/);
 const quoteSchema = z.object({ evidenceId: z.string().min(1), kind: z.enum(["user", "assistant", "artifact"]), quote: z.string().min(1),
   locator: z.string(), observedAt: z.string(), sha256: hash, originalSha256: hash.optional() });
-const claimSchema = z.object({ claimRef: z.string().regex(/^[0-9a-f]{64}:(?:0|[1-9]\d*)$/), recordId: hash,
+const claimSchema = z.object({ claimRef: claimReference, recordId: hash, equivalentPageRefs: z.array(claimReference),
   projectId: z.string().min(1), projectLabel: z.string(), title: z.string().min(1), topic: z.string(), decisionObject: z.string(),
   text: z.string().min(1), kind: z.enum(["decision", "fact", "constraint", "lesson"]),
   status: z.enum(["decided", "historical", "uncertain"]), useWhen: z.string(), rationale: z.string(),
   recordedAt: z.string(), targetPageId: z.string().nullable(), superseded: z.boolean(), quotes: z.array(quoteSchema).min(1),
 }).refine(claim => claim.claimRef.startsWith(claim.recordId + ":"));
-const projectionSchema = z.object({ version: z.literal(1), generationId: z.string(), claims: z.array(claimSchema),
+const projectionSchema = z.object({ version: z.literal(2), generationId: z.string(), claims: z.array(claimSchema),
   superseded: z.array(claimSchema), rejectedRecordIds: z.array(hash) });
 const manifestSchema = z.object({ version: z.literal(2), generationId: z.string(),
   consumerFiles: z.array(z.object({ path: z.string(), sha256: hash })) });

@@ -24,6 +24,7 @@ from test_topic_contract import BASELINE_ID, claim, packet
 
 GENERATION = "g" * 64
 SUBJECT = "样例素材推广"
+SHARED_LOCATOR = "knowledge-evidence://a/" + digest("turn:shared-source")
 
 
 def _record(claim_value, version=3, created_at="2026-09-17T00:00:00Z", **metadata):
@@ -31,7 +32,9 @@ def _record(claim_value, version=3, created_at="2026-09-17T00:00:00Z", **metadat
     value = packet(copy.deepcopy(claim_value))
     payload = value["payload"]
     payload.update({"version": version, "createdAt": created_at, **metadata})
-    return {"id": digest(canonical(payload)), "payload": payload}
+    record = {"id": digest(canonical(payload)), "payload": payload}
+    validate_packet(record, "a", payload["baselineId"])
+    return record
 
 
 def _ledger_record(claim_value, created_at, baseline_id, **metadata):
@@ -42,6 +45,35 @@ def _ledger_record(claim_value, created_at, baseline_id, **metadata):
 def _claim_text(projection, text):
     """Find one rendered claim by its public statement."""
     return next(item for item in projection["claims"] if item["text"] == text)
+
+
+def _rename_primary_evidence(record, evidence_id):
+    """Change only an evidence attempt id while preserving its quoted source."""
+    record["payload"]["claims"][0]["evidenceId"] = evidence_id
+    record["payload"]["evidence"][0]["id"] = evidence_id
+    record["id"] = digest(canonical(record["payload"]))
+    validate_packet(record, "a", record["payload"]["baselineId"])
+    return record
+
+
+def _add_support(record, evidence_id, kind="artifact", quote="Supporting context", locator=SHARED_LOCATOR):
+    """Attach one validated supporting source to a packet fixture."""
+    evidence = {"id": evidence_id, "kind": kind, "text": quote, "sha256": digest(quote),
+                "originalSha256": digest("original:" + quote), "observedAt": "2026-09-17T01:00:00Z",
+                "locator": locator}
+    record["payload"]["claims"][0]["supportingQuotes"] = [{"evidenceId": evidence_id, "quote": quote}]
+    record["payload"]["evidence"].append(evidence)
+    record["id"] = digest(canonical(record["payload"]))
+    validate_packet(record, "a", record["payload"]["baselineId"])
+    return record
+
+
+def _edit_primary_source(record, **changes):
+    """Change validated source metadata without changing the claim's quoted text."""
+    record["payload"]["evidence"][0].update(changes)
+    record["id"] = digest(canonical(record["payload"]))
+    validate_packet(record, "a", record["payload"]["baselineId"])
+    return record
 
 
 class LedgerProjectionTests(unittest.TestCase):
@@ -138,6 +170,116 @@ class LedgerProjectionTests(unittest.TestCase):
         self.assertEqual(projection["claims"], [])
         self.assertEqual(projection["superseded"], [])
 
+    def test_held_v3_matches_equivalent_v2_retries(self):
+        """Given the same reviewed claim retried as v2, Then its page refs are stable hints."""
+        from ledger_projection import build_reviewed_claims_projection
+
+        source = claim(decisionObject=SUBJECT, targetPageId="concepts/held-rule")
+        held = _rename_primary_evidence(
+            _record(source, 3, "2026-09-10T00:00:00Z", projectId="project"), "e-held")
+        first_page = _rename_primary_evidence(
+            _record(claim(decisionObject=SUBJECT, targetPageId="concepts/first-rule"), 2,
+                    "2026-09-18T00:00:00Z", projectId="project"), "e-first")
+        second_page = _rename_primary_evidence(
+            _record(claim(decisionObject=SUBJECT, targetPageId="concepts/second-rule"), 2,
+                    "2026-09-19T00:00:00Z", projectId="project"), "e-second")
+
+        records = [held, first_page, second_page]
+        projection = build_reviewed_claims_projection(records, [], GENERATION)
+        refs = _claim_text(projection, source["text"])["equivalentPageRefs"]
+
+        self.assertEqual(refs, sorted([f"{first_page['id']}:0", f"{second_page['id']}:0"]))
+        self.assertEqual(projection, build_reviewed_claims_projection(records[::-1], [], GENERATION))
+
+    def test_changed_decision_fields_do_not_match(self):
+        """Given any changed decision condition or conclusion, Then no page is suggested."""
+        from ledger_projection import build_reviewed_claims_projection
+
+        changes = {"topic": "Different topic", "decisionObject": "Different decision",
+                   "text": "Different conclusion", "kind": "fact", "status": "historical",
+                   "useWhen": "Different condition", "rationale": "Different reason"}
+        for field, changed in changes.items():
+            with self.subTest(field=field):
+                old = _record(claim(decisionObject=SUBJECT), 2, projectId="project")
+                revised_claim = claim(**{**claim(decisionObject=SUBJECT), field: changed})
+                current = _record(revised_claim, 3, projectId="project")
+                projection = build_reviewed_claims_projection([old, current], [], GENERATION)
+                self.assertEqual(projection["claims"][0]["equivalentPageRefs"], [])
+
+        old_project = _record(claim(decisionObject=SUBJECT), 2, projectId="old-project")
+        current_project = _record(claim(decisionObject=SUBJECT), 3, projectId="new-project")
+        projection = build_reviewed_claims_projection([old_project, current_project], [], GENERATION)
+        self.assertEqual(projection["claims"][0]["equivalentPageRefs"], [])
+
+    def test_changed_quote_source_metadata_does_not_match(self):
+        """Given changed quote or source metadata, Then no page is suggested."""
+        from ledger_projection import build_reviewed_claims_projection
+
+        variants = [("Different supporting quote", "artifact", SHARED_LOCATOR),
+                    ("Supporting context", "user", SHARED_LOCATOR),
+                    ("Supporting context", "artifact", "knowledge-evidence://a/" + digest("other"))]
+        for quote, kind, locator in variants:
+            with self.subTest(quote=quote, kind=kind, locator=locator):
+                old = _add_support(_record(claim(decisionObject=SUBJECT), 2), "support-old")
+                current = _add_support(_record(claim(decisionObject=SUBJECT), 3), "support-new",
+                                       kind=kind, quote=quote, locator=locator)
+                projection = build_reviewed_claims_projection([old, current], [], GENERATION)
+                self.assertEqual(projection["claims"][0]["equivalentPageRefs"], [])
+
+        for field, changed in (("observedAt", "2026-09-18T00:00:00Z"),
+                               ("originalSha256", digest("different original source"))):
+            with self.subTest(field=field):
+                old = _record(claim(decisionObject=SUBJECT), 2)
+                current = _edit_primary_source(_record(claim(decisionObject=SUBJECT), 3),
+                                               **{field: changed})
+                projection = build_reviewed_claims_projection([old, current], [], GENERATION)
+                self.assertEqual(projection["claims"][0]["equivalentPageRefs"], [])
+
+    def test_primary_and_supporting_quote_roles_must_match(self):
+        """Given the same quotes in different evidence roles, Then no page is suggested."""
+        from ledger_projection import build_reviewed_claims_projection
+
+        old_claim = claim(decisionObject=SUBJECT, text="Same conclusion", quote="Primary source")
+        current_claim = claim(decisionObject=SUBJECT, text="Same conclusion", quote="Supporting source")
+        old = _add_support(_record(old_claim, 2), "support-old", quote="Supporting source")
+        current = _add_support(_record(current_claim, 3), "support-new", quote="Primary source")
+        projection = build_reviewed_claims_projection([old, current], [], GENERATION)
+
+        self.assertEqual(projection["claims"][0]["equivalentPageRefs"], [])
+
+    def test_conflicted_or_superseded_v2_cannot_be_a_page_hint(self):
+        """Given a withheld or replaced v2 claim, Then it cannot hint at the current v3 claim."""
+        from ledger_projection import build_reviewed_claims_projection
+
+        conflicted = _record(claim(decisionObject=SUBJECT), 2, projectId="project")
+        current = _record(claim(decisionObject=SUBJECT), 3, projectId="project")
+        blocked = build_reviewed_claims_projection(
+            [conflicted, current], [{"recordIds": [conflicted["id"]]}], GENERATION)
+        self.assertEqual(blocked["claims"][0]["equivalentPageRefs"], [])
+
+        legacy = _record(claim(decisionObject=SUBJECT), 2, "2026-09-10T00:00:00Z", projectId="project")
+        replacement = _record(
+            claim(decisionObject=SUBJECT, supersedes=[f"{legacy['id']}:0"]), 3,
+            "2026-09-20T00:00:00Z", projectId="project")
+        replaced = build_reviewed_claims_projection([legacy, replacement], [], GENERATION)
+        self.assertEqual(replaced["claims"][0]["equivalentPageRefs"], [])
+        self.assertEqual(replaced["superseded"][0]["equivalentPageRefs"], [])
+
+    def test_superseded_v3_remains_visible_but_gets_no_current_page_hint(self):
+        """Given an older projected v3 claim, Then it stays visible after supersession."""
+        from ledger_projection import build_reviewed_claims_projection
+
+        legacy = _record(claim(decisionObject=SUBJECT), 2, projectId="project")
+        earlier = _record(claim(decisionObject=SUBJECT), 3, "2026-09-18T00:00:00Z", projectId="project")
+        latest = _record(claim(decisionObject=SUBJECT, supersedes=[f"{earlier['id']}:0"]), 3,
+                         "2026-09-20T00:00:00Z", projectId="project")
+        projection = build_reviewed_claims_projection([legacy, earlier, latest], [], GENERATION)
+
+        self.assertEqual(len(projection["claims"]), 2)
+        earlier_view = next(item for item in projection["claims"] if item["recordId"] == earlier["id"])
+        self.assertTrue(earlier_view["superseded"])
+        self.assertEqual(earlier_view["equivalentPageRefs"], [])
+
     def test_input_order_does_not_change_projection(self):
         """Given identical records in opposite orders, Then serialized projections match."""
         from ledger_projection import build_reviewed_claims_projection
@@ -152,6 +294,9 @@ class LedgerProjectionTests(unittest.TestCase):
     def test_projection_version_changes_generation_identity(self):
         """Given a new read projection version, Then the generation id cannot reuse old bytes."""
         from replica_generation import READ_PROJECTION_VERSION as current_version
+        from ledger_projection import READ_PROJECTION_VERSION as projection_version
+
+        self.assertEqual(projection_version, 2)
 
         records = [_record(claim())]
         initial = _digest_for(BASELINE_ID, records)
