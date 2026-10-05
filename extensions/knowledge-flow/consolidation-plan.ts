@@ -7,6 +7,14 @@ import type { FlowJob } from "./types.js";
 export const MAX_TOPIC_CONTEXT_CHARS = 120_000;
 /** Largest editable topic page body; planning splits a workstream page that nears it. */
 export const MAX_TOPIC_BODY_CHARS = 12_000;
+/** An overflow carries exact capacity diagnostics for bounded compression and routing recovery. */
+export class TopicBodyLimitError extends Error {
+  constructor(readonly pageId: string, readonly bodyChars: number, phase: "raw" | "expanded" = "expanded") {
+    const expansion = phase === "expanded" ? " after keep expansion" : "";
+    super(`topic page ${pageId} body exceeds limit${expansion}: ${bodyChars}/${MAX_TOPIC_BODY_CHARS} characters `
+      + `(${bodyChars - MAX_TOPIC_BODY_CHARS} over); compress repeated prose on this page while preserving supported information and existing citations.`);
+  }
+}
 /**
  * A full date (2026-09-24, 2026/9/24, 2026年9月24日) or a standalone month-day batch number (0918) names one action,
  * not a durable topic. A bare year is left alone because annual plans are durable.
@@ -40,7 +48,8 @@ export function topicCatalog(existing: ReadonlyMap<string, string>): unknown[] {
     const { meta, body } = parseFrontmatter(text);
     return { pageId, title: meta.title, sourceProjectIds: sourceProjectIds(meta),
       topic: meta.knowledgeTopic, decisionObject: meta.knowledgeDecisionObject,
-      summary: meta.summary, headings: body.split("\n").filter(line => /^#{1,3} /.test(line)), bodyChars: body.length };
+      summary: meta.summary, headings: body.split("\n").filter(line => /^#{1,3} /.test(line)), bodyChars: body.length,
+      maxBodyChars: MAX_TOPIC_BODY_CHARS, remainingBodyChars: Math.max(0, MAX_TOPIC_BODY_CHARS - body.length) };
   });
 }
 

@@ -4,6 +4,8 @@ import { authorityViolation } from "./authority-policy.js";
 import { parseFrontmatter } from "../../src/utils/markdown.js";
 import { diagnoseClaims, formatClaimDiagnostics } from "./extract.js";
 import type { FlowClaim, FlowEvidence, FlowJob } from "./types.js";
+import { TopicBodyLimitError } from "./consolidation-plan.js";
+import { assertEvidenceDates } from "./consolidation-dates.js";
 import type { PlannedPage } from "./consolidation-plan.js";
 import type { TopicRevision } from "./topic-revision-types.js";
 import { validateCitationChanges, validateRetirementReferences } from "./citation-retirement.js";
@@ -124,6 +126,7 @@ export function validatedDraft(draft: TopicDraft, job: FlowJob, pages: PlannedPa
     throw new Error("reference material is not evidence of a user decision");
   }
   if (draft.pages.length !== pages.length) throw new Error("topic draft omitted a planned page");
+  assertEvidenceDates(draft, pages, job.evidence);
   const seen = new Set<number>(); const pageIds = new Set<string>();
   const revisions = draft.pages.map(edit => {
     const page = pages.find(item => item.pageId === edit.pageId);
@@ -171,8 +174,7 @@ function validateEdit(edit: TopicDraft["pages"][number], page: PlannedPage, clai
 function validateBodyBudget(pageId: string, expandedBodyChars: number): void {
   const budget = topicPageBodyBudget(pageId, expandedBodyChars);
   if (budget.additionalAvailableChars >= 0) return;
-  throw new Error(`topic page ${pageId} body exceeds limit after keep expansion: ${expandedBodyChars}/${budget.maximumBodyChars} characters `
-    + `(${Math.abs(budget.additionalAvailableChars)} over); compress repeated prose on this page while preserving supported information and existing citations.`);
+  throw new TopicBodyLimitError(pageId, expandedBodyChars);
 }
 
 function belongsToPage(claim: FlowClaim | undefined, page: PlannedPage): boolean {

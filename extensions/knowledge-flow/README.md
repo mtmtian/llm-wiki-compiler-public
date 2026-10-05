@@ -68,7 +68,15 @@ work, such as its reporting rules, attribution data or release pipeline. Another
 the same workstream becomes a section of that page. A new page needs a workstream no page covers,
 or a sub-workstream once a page nears the editable body limit (`MAX_TOPIC_BODY_CHARS`, 12,000
 characters), and its reason names the closest existing page. The planning and review catalogs carry
-each page's `bodyChars` for that judgement, and review rejects a page that should have been a section.
+each page's `bodyChars`, `maxBodyChars` and `remainingBodyChars` for that judgement, and review rejects a page that should have been a section.
+The planner routes from this compact catalog; complete originals and cited sources are supplied to
+the editor and reviewer after routing. Missing full text during planning alone is not a reason for
+human review. The body limit counts restored keep paragraphs. An expanded-body overflow first uses
+the existing validator-driven correction to compact the same page while preserving evidence. If it
+still overflows, or a raw edit exceeds schema capacity before claim restoration, one capacity replan
+uses the same evidence and scope, with separate `capacity` model-stage caches. The new plan
+may choose a suitable existing page or a genuinely distinct sub-workstream; another overflow ends
+as a technical failure. It never silently truncates prose or weakens citation checks.
 
 Each model stage has a durable input-bound result. Finalization advances the
 checkpoint once, after publication export succeeds. New messages arriving during
@@ -91,6 +99,14 @@ The editor receives each existing page's `citationChecklist` and must keep or re
 The independent reviewer can accept an explicit user change while preserving useful
 prior rationale, constraints and counterexamples. It holds unresolved conflicts and uncertain
 intent. Multi-turn approvals retain both original proposal and approval quotes.
+Before review, a bounded date check rejects explicit report/effective dates copied from capture or
+publication metadata when the claim's quotes contain no such date. It checks new claim-linked prose,
+headings and claim text, leaving unchanged old paragraphs alone; other date semantics still require
+independent review. Corrections retain their original quote bindings unless review permits a source change.
+Each correction review receives the previous verdict, stable claim mapping and changed paragraphs
+alongside the complete evidence and revisions. Prior acceptance is context, never proof. A `pruned`
+review explicitly judges the accepted subset: omitted claims remain withheld, while missing necessary
+conditions, broken references or any evidence violation still block publication.
 The reviewer also returns a conclusion for each claim (`claimDecisions`); each review attempt's conclusions travel on the batch result as `claimReviews`, and a missing or incomplete list is recorded as incomplete rather than holding the batch. The page-level decision still decides whether a batch publishes or is held, with one refinement: when the final review rejects some claims but accepts others, `claim-pruning.ts` removes the lines citing the rejected claims (only when they carry no accepted claim and no existing citation, and drops a heading left empty by the removal), renumbers the rest, and the reduced draft is validated and reviewed again as stage `pruned` (a page whose claims were all rejected leaves the plan for that review and keeps its current text); it publishes only if that fresh review accepts it, and a rejection remains a technical failure unless a review identifies unresolved user intent. Diagnostics preserve the original reason plus the correction or pruning failure. When the knowledge-ledger gate is enabled (`deployment/KNOWLEDGE-LEDGER.md` §7), a held or terminally failed batch whose complete final claim review accepted some claims publishes exactly those claims, with only the evidence they cite, as one ledger record (version 3), retaining its unresolved page outcome; a closed gate, an unready reader or a contract violation publishes nothing and records `ledgerError`.
 The editor and reviewer also receive original files cited by the prior page;
 unavailable sources stop the batch as a retryable technical failure. One bounded
