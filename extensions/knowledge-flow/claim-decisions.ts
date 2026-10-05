@@ -17,7 +17,7 @@ export function claimReview(stage: string | undefined, review: { decision: Claim
   const indexes = new Set(claims.map(item => item.claimIndex));
   const complete = claims.length === claimCount && indexes.size === claimCount
     && Array.from({ length: claimCount }, (_, index) => index).every(index => indexes.has(index));
-  const recordedStage = stage === "correction" || stage === "pruned" ? stage : "initial";
+  const recordedStage = stage === "correction" || stage === "recorrection" || stage === "pruned" ? stage : "initial";
   return { stage: recordedStage, decision: review.decision, complete, claims };
 }
 
