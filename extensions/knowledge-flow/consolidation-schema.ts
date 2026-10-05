@@ -3,11 +3,7 @@ import { CLAIM_SCHEMA } from "./extract.js";
 import type { LLMTool } from "../../src/utils/provider.js";
 import type { CorrectionEvidence } from "./consolidation-quotes.js";
 import { MAX_TOPIC_BODY_CHARS } from "./consolidation-plan.js";
-
-const text = (maxLength: number) => ({ type: "string", minLength: 1, maxLength });
-const object = (properties: Record<string, unknown>, optional: Record<string, unknown> = {}) => ({
-  type: "object", additionalProperties: false, properties: { ...properties, ...optional }, required: Object.keys(properties) });
-const array = (items: unknown, maxItems: number) => ({ type: "array", items, maxItems });
+import { schemaArray as array, schemaObject as object, schemaText as text } from "./schema-builders.js";
 const index = { type: "integer", minimum: 0, maximum: 4 };
 /** Correction-only replacement contract: one literal survivor, never prose or a list. */
 const retirementReplacement = { anyOf: [
@@ -15,10 +11,7 @@ const retirementReplacement = { anyOf: [
   { type: "string", minLength: 1, maxLength: 32, pattern: "^\\{\\{claim:[0-4]\\}\\}$" },
   { type: "string", minLength: 1, maxLength: 2048, pattern: "^https://[^\\s]+$" },
 ] };
-const retirement = object({ citation: text(1024), reason: text(1000),
-  // The first draft still enters the existing deterministic correction path;
-  // correction retries use the literal-only schema below.
-  replacement: text(2048) });
+const retirement = object({ citation: text(1024), reason: text(1000), replacement: text(2048) });
 const pageEdit = object({ pageId: text(180), body: text(MAX_TOPIC_BODY_CHARS), claimIndexes: array(index, 5) },
   { citationRetirements: array(retirement, 500) });
 const verdict = { enum: ["accept", "reject", "needs_review"] };
@@ -33,6 +26,7 @@ const claimDecisions = (claimIndex: Record<string, unknown>, maxItems = MAX_CLAI
 const reviewOutput = object({ decision: verdict, reason: text(2000),
   checkedClaimIndexes: array(index, 5), checkedPageIds: array(text(180), 5) },
   { checkedRetiredCitations: array(text(1024), 500), claimDecisions: claimDecisions(index),
+    replaceEvidenceForClaims: array(index, 5),
     quoteRepairs: array(object({ claimIndex: index, quoteId: text(180) }), 5) });
 
 function allowedStrings(values: readonly string[], maxLength: number): Record<string, unknown> {
@@ -51,7 +45,7 @@ type ObjectSchema = { properties: Record<string, unknown>; required?: string[] }
 type ArrayObjectSchema = { items: ObjectSchema };
 type CorrectionRole = "user" | "assistant" | "artifact";
 
-const CORRECTION_KINDS: Record<CorrectionRole, readonly string[]> = {
+const ROLE_KINDS: Record<CorrectionRole, readonly string[]> = {
   user: ["decision", "fact", "constraint", "lesson"],
   assistant: ["lesson"],
   artifact: ["fact", "lesson", "constraint"],
@@ -81,31 +75,16 @@ export function createPlanTool(allowedPageIds: readonly string[]): LLMTool {
   return tool;
 }
 
-/** Claims retain their established evidence schema; prose is edited once per destination. */
-export const editTool: LLMTool = { name: "knowledge_topic_edit", description: "Write coherent topic revisions and evidence-bound claims.",
+/** Base claim contract before quote and page choices are bound to this run. */
+const editTool: LLMTool = { name: "knowledge_topic_edit", description: "Write coherent topic revisions and evidence-bound claims.",
   input_schema: object({ claims: (CLAIM_SCHEMA.properties as Record<string, unknown>).claims,
     pages: array(pageEdit, 5), summary: text(4000) }) };
 
-/**
- * Bind both evidence references and page destinations to the frozen request.
- * The runtime validator remains authoritative; this schema only prevents
- * common hallucinated IDs before a correction attempt consumes a model call.
- */
-export function createEditTool(destinationPageIds: readonly string[], evidenceIds: readonly string[]): LLMTool {
-  const tool = structuredClone(editTool);
-  const properties = tool.input_schema.properties as Record<string, ArrayObjectSchema>;
-  const claimItem = properties.claims.items;
-  claimItem.properties.evidenceId = allowedStrings(evidenceIds, 120);
-  claimItem.properties.targetPageId = nullableAllowed(destinationPageIds, 180);
-  properties.pages.items.properties.pageId = allowedStrings(destinationPageIds, 180);
-  return tool;
-}
-
-/** Correction schema: select frozen quote IDs; never rewrite source text. */
-export function createCorrectionEditTool(
+/** Initial and correction edits select exact quote IDs; they never copy source text or page metadata. */
+export function createQuoteBoundEditTool(
   destinationPageIds: readonly string[], catalog: readonly CorrectionEvidence[],
 ): LLMTool {
-  const tool = createEditTool(destinationPageIds, catalogEvidenceIds(catalog));
+  const tool = structuredClone(editTool);
   const properties = tool.input_schema.properties as Record<string, unknown>;
   const claims = properties.claims as ArrayObjectSchema;
   const baseClaim = claims.items;
@@ -115,13 +94,14 @@ export function createCorrectionEditTool(
   delete baseClaim.properties.decisionObject;
   delete baseClaim.properties.targetPageId;
   baseClaim.required = [...(baseClaim.required ?? []).filter(name => !["quote", "evidenceId", "topic", "decisionObject", "targetPageId"].includes(name)), "quoteId", "targetPageId"];
-  const branches = (Object.keys(CORRECTION_KINDS) as CorrectionRole[])
+  const branches = (Object.keys(ROLE_KINDS) as CorrectionRole[])
     .map(role => correctionClaimBranch(baseClaim, role, catalog, destinationPageIds))
     .filter((branch): branch is Record<string, unknown> => branch !== null);
   properties.claims = branches.length
     ? { ...claims, items: { anyOf: branches } }
     : { ...claims, maxItems: 0, items: emptyObjectSchema() };
   const pages = properties.pages as ArrayObjectSchema;
+  pages.items.properties.pageId = allowedStrings(destinationPageIds, 180);
   (pages.items.properties.citationRetirements as ArrayObjectSchema).items.properties.replacement = retirementReplacement;
   return tool;
 }
@@ -135,7 +115,7 @@ function correctionClaimBranch(baseClaim: ObjectSchema, role: CorrectionRole,
   const properties = { ...baseClaim.properties,
     quoteId: allowedStrings(primary.flatMap(item => item.quoteOptions.map(option => option.quoteId)), 180),
     targetPageId: allowedStrings(destinationPageIds, 180),
-    kind: { enum: [...CORRECTION_KINDS[role]] }, status: { enum: role === "user" ? ["decided", "historical"] : ["historical"] },
+    kind: { enum: [...ROLE_KINDS[role]] }, status: { enum: role === "user" ? ["decided", "historical", "uncertain"] : ["historical"] },
     supportingQuotes: correctionSupportSchema(support),
   };
   return { type: "object", additionalProperties: false, properties, required: [...(baseClaim.required ?? [])] };
@@ -154,18 +134,11 @@ function roleEvidence(catalog: readonly CorrectionEvidence[], role: CorrectionRo
   return catalog.filter(item => item.kind === role && item.quoteOptions.length > 0);
 }
 
-function catalogEvidenceIds(catalog: readonly CorrectionEvidence[]): string[] {
-  return [...new Set(catalog.filter(item => item.quoteOptions.length > 0).map(item => item.id))];
-}
-
 /** Acceptance covers every claim and every complete page diff, including removed text. */
 export const topicReviewTool: LLMTool = { name: "knowledge_topic_review", description: "Independently verify evidence, routing, history and the entire edit.",
   input_schema: reviewOutput };
 
-/**
- * Bind review arrays to the actual claims, revised pages and retirements in this run.
- * Catalog pages remain context only and cannot be claimed as reviewed output.
- */
+/** Bind review arrays to this draft's claims, revised pages and retirements. */
 export function createTopicReviewTool(claimCount: number, pageIds: readonly string[],
   retirementCitations: readonly string[], quoteIds: readonly string[] = []): LLMTool {
   const claimIndexes = Array.from({ length: claimCount }, (_, value) => value);
@@ -181,5 +154,6 @@ export function createTopicReviewTool(claimCount: number, pageIds: readonly stri
       checkedPageIds: array(pageSchema, Math.min(5, pageIds.length)) },
     { checkedRetiredCitations: array(retirementSchema, Math.min(500, retirementCitations.length)),
       claimDecisions: claimDecisions(allowedIndexes(claimIndexes), claimCount ? MAX_CLAIM_DECISIONS : 0),
+      replaceEvidenceForClaims: array(allowedIndexes(claimIndexes), claimCount),
       quoteRepairs: quoteRepairSchema }) };
 }

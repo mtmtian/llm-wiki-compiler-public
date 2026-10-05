@@ -4,8 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { consolidateSession } from "../extensions/knowledge-flow/consolidate.js";
 import type { TopicDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
-import type { CorrectionEvidence } from "../extensions/knowledge-flow/consolidation-quotes.js";
+import { buildCorrectionEvidence } from "../extensions/knowledge-flow/consolidation-quotes.js";
 import { materializeRecords } from "../extensions/knowledge-flow/materialize.js";
+import { stableClaimMarkers } from "./knowledge-flow-consolidation-fixtures.js";
 import { validateRetirementReferences } from "../extensions/knowledge-flow/citation-retirement.js";
 import type { PublicationRecord } from "../extensions/knowledge-flow/publication-types.js";
 import type { FlowConfig, FlowJob } from "../extensions/knowledge-flow/types.js";
@@ -52,29 +53,51 @@ function unquotedRetirementDraft(url: string): TopicDraft {
   return { claims: [{ text: quote, evidenceId: "e0", quote, title: "发布方案", topic: "样例素材推广",
     decisionObject: "样例项目首轮素材测试", slug: "replay", targetPageId: pageId, kind: "decision", status: "decided",
     useWhen: "发布时", rationale: "用户明确确认", replacementIntent: false, supportingQuotes: [] }],
-    pages: [{ pageId, body: `## 发布方案\n\n{{claim:0}}\n\n外部记录 ${url}`, claimIndexes: [0],
+    pages: [{ pageId, body: `## 发布方案\n\n用户确认保留发布方案。{{claim:0}}\n\n外部记录 ${url}`, claimIndexes: [0],
       citationRetirements: [{ citation: "^[legacy.md:1]", reason: "过程记录由外部 PR 承接", replacement: url }] }], summary: "保留方案并记录外部过程链接" };
 }
 
 function consolidationConfig(base: FlowConfig, url: string): FlowConfig {
   const unsupported = async (): Promise<never> => { throw new Error("unexpected provider operation"); };
   const draft = unquotedRetirementDraft(url);
+  const quoteCatalog = buildCorrectionEvidence(consolidationJob(url).evidence);
   const provider: LLMProvider = { complete: unsupported, stream: unsupported, embed: unsupported,
     toolCall: async (_system, messages, tools): Promise<string> => {
       if (tools[0].name === "knowledge_topic_plan") return JSON.stringify({ summary: "保留发布方案", disposition: "edit", reason: "同一对象更新",
         pages: [{ action: "update", targetPageId: pageId, title: "发布方案", topic: "样例素材推广", decisionObject: "样例项目首轮素材测试", reason: "同一对象" }] });
       if (tools[0].name === "knowledge_topic_edit") {
-        const request = JSON.parse(messages[0].content) as { correction?: unknown; evidence: CorrectionEvidence[] };
-        if (!request.correction) return JSON.stringify(draft);
-        const { quote, evidenceId: _evidenceId, topic: _topic, decisionObject: _decisionObject, ...claim } = draft.claims[0];
-        const option = request.evidence.flatMap(item => item.quoteOptions).find(item => item.quote === quote);
-        if (!option) throw new Error("fixture quote missing from correction evidence");
-        return JSON.stringify({ ...draft, claims: [{ ...claim, quoteId: option.quoteId }] });
+        const request = JSON.parse(messages[0].content) as { correction?: { previousDraft: Record<string, any> } };
+        if (!request.correction) return JSON.stringify(quoteBoundDraft(draft, quoteCatalog));
+        return JSON.stringify(correctionPatch(draft, request.correction.previousDraft));
       }
+      if (tools[0].name === "knowledge_topic_review") return JSON.stringify({ decision: "accept", reason: "来源已核验",
+        checkedClaimIndexes: [0], checkedPageIds: [pageId], checkedRetiredCitations: ["^[legacy.md:1]"] });
       throw new Error(`unexpected tool ${tools[0].name}`);
     },
   };
   return { ...base, provider, reviewer: provider };
+}
+
+function quoteBoundDraft(draft: TopicDraft, catalog: ReturnType<typeof buildCorrectionEvidence>): Record<string, unknown> {
+  return { ...draft, claims: draft.claims.map(claim => {
+    const option = catalog.find(item => item.id === claim.evidenceId)?.quoteOptions.find(item => item.quote === claim.quote);
+    const { evidenceId: _evidenceId, quote: _quote, topic: _topic, decisionObject: _decisionObject,
+      supportingQuotes, ...fields } = claim;
+    return { ...fields, quoteId: option?.quoteId ?? "unknown-quote", supportingQuotes: (supportingQuotes ?? []).map(item => {
+      const support = catalog.find(source => source.id === item.evidenceId)?.quoteOptions.find(candidate => candidate.quote === item.quote);
+      return { quoteId: support?.quoteId ?? "unknown-quote" };
+    }) };
+  }) };
+}
+
+function correctionPatch(draft: TopicDraft, previous: Record<string, any>): Record<string, unknown> {
+  const claims = previous.claims as Array<Record<string, any>>;
+  const pages = draft.pages.map(page => ({ pageId: page.pageId, body: stableClaimMarkers(page.body, claims),
+    claimIds: page.claimIndexes.map(index => claims[index]?.claimId ?? `c${index}`),
+    ...(page.citationRetirements?.length ? { citationRetirements: page.citationRetirements.map(item => ({
+      ...item, replacement: stableClaimMarkers(item.replacement, claims),
+    })) } : {}) }));
+  return { claimUpdates: [], droppedClaimIds: [], pages, summary: draft.summary };
 }
 
 describe("reviewed citation retirement replay", () => {

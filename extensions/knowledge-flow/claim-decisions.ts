@@ -22,7 +22,7 @@ export function claimReview(stage: string | undefined, review: { decision: Claim
 }
 
 /** Claim indexes a review did not accept; empty when the attempt never reached review. */
-export function disputedClaims(review: ClaimReview | undefined): Set<number> {
+function disputedClaims(review: ClaimReview | undefined): Set<number> {
   return new Set(review?.claims.filter(item => item.decision !== "accept").map(item => item.claimIndex));
 }
 

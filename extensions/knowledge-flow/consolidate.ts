@@ -6,21 +6,21 @@
 import { CodexAgentProvider } from "../../src/providers/codex-agent.js";
 import type { LLMProvider } from "../../src/utils/provider.js";
 import type { ClaimDecision, ClaimReview, FlowConfig, FlowJob, FlowResult } from "./types.js";
-import { claimReview, disputedClaims, finishResult } from "./claim-decisions.js";
-import { createCorrectionEditTool, createPlanTool, createTopicReviewTool, editTool, planTool } from "./consolidation-schema.js";
+import { claimReview, finishResult } from "./claim-decisions.js";
+import { createPlanTool, createQuoteBoundEditTool, createTopicReviewTool, planTool } from "./consolidation-schema.js";
 import { ConsolidationOutputError, durableModel } from "./consolidation-model.js";
 import { assertTopicContextBudget, resolvePlan, topicCatalog } from "./consolidation-plan.js";
 import type { TopicPlan, PlannedPage } from "./consolidation-plan.js";
-import { resolveCorrectionDraft, unchangedRevisions, UncertainClaimsError, validatedDraft, withRoleAuthority, withSessionEvidence } from "./consolidation-draft.js";
-import type { CorrectionTopicDraft, TopicDraft } from "./consolidation-draft.js";
+import { resolveQuoteBoundDraft, unchangedRevisions, UncertainClaimsError, validatedDraft, withSessionEvidence } from "./consolidation-draft.js";
+import type { QuoteBoundTopicDraft, StableClaimEntry, TopicDraft } from "./consolidation-draft.js";
 import { planningCorrectionPrompt, planningPrompt, planSystem, editSystem, correctionEditSystem, reviewSystem, withTopicScope } from "./consolidation-prompts.js";
 import { buildCorrectionEvidence } from "./consolidation-quotes.js";
+import { applyCorrectionPatch, correctionPermissionsForReview, createCorrectionPatchTool, stableDraftView } from "./claim-patch.js";
+import type { CorrectionPatch, CorrectionPermissions } from "./claim-patch.js";
 import { quoteContribution } from "./contribution.js";
 import { priorSourceContext } from "./consolidation-sources.js";
 import { validateRetirementReferences } from "./citation-retirement.js";
 import { citationChecklist, unaccountedCitations, withRepairedCitations } from "./citation-repair.js";
-import { claimAnchors, preserveEvidence, withRepairedQuotes } from "./quote-repair.js";
-import { applyReviewedQuoteRepairs } from "./reviewed-quote-repair.js";
 import { withoutRejectedClaims } from "./claim-pruning.js";
 import { editablePages, pagePublishedAt, withKeptParagraphs } from "./kept-paragraphs.js";
 
@@ -36,7 +36,11 @@ interface TopicReview {
   /** Optional to the program: nothing depends on it until the ledger gate (claim-decisions.ts). */
   claimDecisions?: ClaimDecision[];
   quoteRepairs?: Array<{ claimIndex: number; quoteId: string }>;
+  replaceEvidenceForClaims?: number[];
 }
+
+interface DraftCorrection { reason: string; previousDraft: TopicDraft; stableClaims: StableClaimEntry[];
+  permissions: CorrectionPermissions; review?: TopicReview; }
 
 /** Process a bounded increment using durable session context and its complete scoped topic catalog. */
 export async function consolidateSession(input: FlowJob, config: FlowConfig, existing: ReadonlyMap<string, string>): Promise<FlowResult> {
@@ -87,8 +91,8 @@ async function editAndReview(job: FlowJob, config: FlowConfig, context: EditCont
   const reviewer = config.reviewer ?? new CodexAgentProvider(config.model, { timeoutMs: 180_000 });
   const run: EditRunContext = { job, config, topic: context,
     request: { stateDir: config.stateDir, jobId: job.id, model: config.model, provider }, reviewer,
-    correctionCatalog: buildCorrectionEvidence(job.evidence), claimReviews: [] };
-  let correction: { reason: string; previousDraft: TopicDraft } | undefined;
+    correctionCatalog: buildCorrectionEvidence(job.evidence), claimReviews: [], stableClaims: [] };
+  let correction: DraftCorrection | undefined;
   for (const stage of [undefined, "correction"]) {
     let outcome: EditStageResult;
     try { outcome = await runEditStage(run, stage, correction); }
@@ -111,46 +115,38 @@ interface EditRunContext {
   correctionCatalog: ReturnType<typeof buildCorrectionEvidence>;
   /** Per-claim conclusions of each review attempt, in order (claim-decisions.ts). */
   claimReviews: ClaimReview[];
+  /** Run-local stable identities for the current draft, excluded from FlowClaim and publication data. */
+  stableClaims: StableClaimEntry[];
   /** The contribution the latest review judged; its accepted claims may become a ledger record. */
   reviewed?: NonNullable<FlowResult["contribution"]>;
 }
-type DraftAttemptResult = { ok: true; draft: TopicDraft } | { ok: false; error: string };
-interface EditStageResult { result?: FlowResult; correction?: { reason: string; previousDraft: TopicDraft }; }
+type DraftAttemptResult = { ok: true; draft: TopicDraft; stableClaims: StableClaimEntry[] } | { ok: false; error: string };
+interface EditStageResult { result?: FlowResult; correction?: DraftCorrection; }
 
 async function runEditStage(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined): Promise<EditStageResult> {
+  correction: DraftCorrection | undefined): Promise<EditStageResult> {
   const attempt = await draftAttempt(run, stage, correction);
   if (!attempt.ok) return { result: failed(run.job, attempt.error, correction?.previousDraft.summary ?? "") };
-  const anchored = correction ? preserveEvidence(attempt.draft, correction.previousDraft, { evidence: run.job.evidence,
-    catalog: run.correctionCatalog, disputed: disputedClaims(run.claimReviews.at(-1)) }) : attempt.draft;
-  const repaired = withRepairedQuotes(anchored, run.job.evidence);
-  const draft = withRepairedCitations(withRoleAuthority(repaired, run.job.evidence), run.topic.pages);
-  return validateAndReviewStage(run, stage, correction, draft);
+  run.stableClaims = attempt.stableClaims;
+  const draft = withRepairedCitations(attempt.draft, run.topic.pages);
+  return validateAndReviewStage(run, stage, correction, draft, attempt.stableClaims);
 }
 
 async function validateAndReviewStage(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined, draft: TopicDraft): Promise<EditStageResult> {
+  correction: DraftCorrection | undefined, draft: TopicDraft, stableClaims: StableClaimEntry[]): Promise<EditStageResult> {
   const outcome = await reviewedDraft(run, stage, draft);
   if ("error" in outcome) return outcome.requiresDecision
-    ? { result: held(run.job, outcome.error, draft.summary) } : validationFailure(run, stage, correction, draft, outcome.error);
+    ? { result: held(run.job, outcome.error, draft.summary) } : validationFailure(run, stage, correction, draft, stableClaims, outcome.error);
   const { review, contribution } = outcome;
   if (review.decision === "accept") return { result: acceptedReview(run.job, draft.summary, review, contribution, run.topic.pages) };
-  if (review.decision === "reject" && !stage) {
-    const repaired = applyReviewedQuoteRepairs(draft, review, run.correctionCatalog, run.job.evidence);
-    if (repaired) return reviewedQuoteRepair(run, repaired);
-  }
   if (finalRejection(review, stage)) return { result: await acceptedClaimsOnly(run, draft, review) };
-  return { correction: { reason: review.reason, previousDraft: draft } };
-}
-
-/** A quote-only repair replaces the editor correction and receives one complete independent review. */
-async function reviewedQuoteRepair(run: EditRunContext, draft: TopicDraft): Promise<EditStageResult> {
-  const outcome = await reviewedDraft(run, "correction", draft);
-  if ("error" in outcome) return { result: (outcome.requiresDecision ? held : failed)(run.job, outcome.error, draft.summary) };
-  if (outcome.review.decision === "accept") {
-    return { result: acceptedReview(run.job, draft.summary, outcome.review, outcome.contribution, run.topic.pages) };
+  const reviewedClaims = stableClaims;
+  try {
+    const permissions = correctionPermissionsForReview(reviewedClaims, review);
+    return { correction: { reason: review.reason, previousDraft: draft, stableClaims: reviewedClaims, permissions, review } };
+  } catch (error) {
+    return { result: failed(run.job, errorMessage(error), draft.summary) };
   }
-  return { result: await acceptedClaimsOnly(run, draft, outcome.review) };
 }
 
 type ReviewedDraft = { review: TopicReview; contribution: NonNullable<FlowResult["contribution"]> } | { error: string; requiresDecision?: boolean };
@@ -200,18 +196,19 @@ function narrowedTopic(topic: EditContext, draft: TopicDraft): EditContext {
     plan: { ...topic.plan, pages: kept.map(index => topic.plan.pages[index]) } };
 }
 
-function validationFailure(run: EditRunContext, stage: string | undefined, correction: { reason: string; previousDraft: TopicDraft } | undefined,
-  draft: TopicDraft, reason: string): EditStageResult {
-  if (!stage) return { correction: { reason, previousDraft: draft } };
+function validationFailure(run: EditRunContext, stage: string | undefined, correction: DraftCorrection | undefined,
+  draft: TopicDraft, stableClaims: StableClaimEntry[], reason: string): EditStageResult {
+  if (!stage) return { correction: { reason, previousDraft: draft, stableClaims,
+    permissions: { lockedClaimIds: [], replaceEvidenceForClaimIds: [] } } };
   return { result: failed(run.job, reason, draft.summary ?? correction?.previousDraft.summary ?? "") };
 }
 
 async function draftAttempt(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined): Promise<DraftAttemptResult> {
-  const tool = draftTool(run, stage);
+  correction: DraftCorrection | undefined): Promise<DraftAttemptResult> {
+  const tool = draftTool(run, stage, correction);
   try {
     const modelDraft = await loadDraftModel(run, stage, correction, tool);
-    return { ok: true, draft: restoredDraft(stage, modelDraft, run) };
+    return { ok: true, ...restoredDraft(stage, modelDraft, correction, run) };
   } catch (error) {
     if (!stage || !(error instanceof ConsolidationOutputError)) throw error;
     return { ok: false, error: `correction evidence selection failed: ${errorMessage(error)}` };
@@ -219,40 +216,49 @@ async function draftAttempt(run: EditRunContext, stage: string | undefined,
 }
 
 /** Materialization errors describe invalid returned data, not an unavailable model transport. */
-function restoredDraft(stage: string | undefined, modelDraft: TopicDraft | CorrectionTopicDraft, run: EditRunContext): TopicDraft {
-  try { return withKeptParagraphs(restoreDraft(stage, modelDraft, run.correctionCatalog, run.topic.pages), run.topic.pages); }
-  catch (error) { throw new ConsolidationOutputError(errorMessage(error)); }
+function restoredDraft(stage: string | undefined, modelDraft: CorrectionPatch | QuoteBoundTopicDraft,
+  correction: DraftCorrection | undefined, run: EditRunContext) {
+  try {
+    const restored = restoreDraft(stage, modelDraft, correction, run.correctionCatalog, run.topic.pages);
+    return { draft: withKeptParagraphs(restored.draft, run.topic.pages), stableClaims: restored.stableClaims };
+  } catch (error) { throw new ConsolidationOutputError(errorMessage(error)); }
 }
 
-function draftTool(run: EditRunContext, stage: string | undefined) {
-  return stage ? createCorrectionEditTool(run.topic.pages.map(page => page.pageId), run.correctionCatalog) : editTool;
+function draftTool(run: EditRunContext, stage: string | undefined, correction?: DraftCorrection) {
+  return stage ? createCorrectionPatchTool(run.topic.pages.map(page => page.pageId), run.correctionCatalog,
+    correction?.stableClaims ?? [], correction?.permissions ?? { lockedClaimIds: [], replaceEvidenceForClaimIds: [] })
+    : createQuoteBoundEditTool(run.topic.pages.map(page => page.pageId), run.correctionCatalog);
 }
 
 async function loadDraftModel(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined, tool: ReturnType<typeof createCorrectionEditTool>): Promise<TopicDraft | CorrectionTopicDraft> {
+  correction: DraftCorrection | undefined,
+  tool: ReturnType<typeof createCorrectionPatchTool> | ReturnType<typeof createQuoteBoundEditTool>): Promise<CorrectionPatch | QuoteBoundTopicDraft> {
   const system = withTopicScope(run.job, stage ? correctionEditSystem : editSystem);
-  return durableModel<TopicDraft | CorrectionTopicDraft>({ ...run.request, stage, tool, system,
+  return durableModel<CorrectionPatch | QuoteBoundTopicDraft>({ ...run.request, stage, tool, system,
     prompt: draftPrompt(run, stage, correction), tokens: 12000 });
 }
 
 function draftPrompt(run: EditRunContext, stage: string | undefined,
-  correction: { reason: string; previousDraft: TopicDraft } | undefined): string {
-  const correctionContext = correction ? { ...correction, diagnostics: correction.reason,
-    unaccountedCitations: unaccountedCitations(correction.previousDraft, run.topic.pages),
-    claimAnchors: claimAnchors(correction.previousDraft, run.correctionCatalog) } : undefined;
+  correction: DraftCorrection | undefined): string {
+  const correctionContext = correction ? { diagnostics: correction.reason, review: correction.review,
+    permissions: correction.permissions, previousDraft: stableDraftView(correction.previousDraft, correction.stableClaims),
+    unaccountedCitations: unaccountedCitations(correction.previousDraft, run.topic.pages) } : undefined;
   return JSON.stringify({ projectId: run.job.projectId, sourceProjectId: run.job.projectId,
     ...(run.job.topicScope ? { topicScope: run.job.topicScope } : {}), currentTaskContext: run.job.prompt,
     sessionContext: run.job.sessionContext?.summary, plan: run.topic.plan,
-    pages: editablePages(run.topic.pages), priorSources: run.topic.priorSources, evidence: stage ? run.correctionCatalog : run.job.evidence,
+    pages: editablePages(run.topic.pages), priorSources: run.topic.priorSources, evidence: run.correctionCatalog,
     maxClaims: run.config.maxProposals,
     citationChecklist: citationChecklist(run.topic.pages),
-    quoteSelection: stage ? "Choose quoteId values from the frozen quoteOptions; do not write source quote text." : undefined,
+    quoteSelection: "Choose quoteId values from the frozen quoteOptions; do not write source quote text.",
     correction: correctionContext });
 }
 
-function restoreDraft(stage: string | undefined, modelDraft: TopicDraft | CorrectionTopicDraft,
-  catalog: ReturnType<typeof buildCorrectionEvidence>, frozenPages: readonly PlannedPage[]): TopicDraft {
-  return stage ? resolveCorrectionDraft(modelDraft as CorrectionTopicDraft, catalog, frozenPages) : modelDraft as TopicDraft;
+function restoreDraft(stage: string | undefined, modelDraft: CorrectionPatch | QuoteBoundTopicDraft,
+  correction: DraftCorrection | undefined, catalog: ReturnType<typeof buildCorrectionEvidence>, frozenPages: readonly PlannedPage[]):
+  { draft: TopicDraft; stableClaims: StableClaimEntry[] } {
+  if (!stage) return resolveQuoteBoundDraft(modelDraft as QuoteBoundTopicDraft, catalog, frozenPages);
+  if (!correction) throw new Error("correction context is missing");
+  return applyCorrectionPatch(modelDraft as CorrectionPatch, correction.stableClaims, correction.permissions, catalog, frozenPages);
 }
 
 async function reviewAttempt(run: EditRunContext, stage: string | undefined, draft: TopicDraft,
@@ -264,7 +270,6 @@ async function reviewAttempt(run: EditRunContext, stage: string | undefined, dra
     prompt: JSON.stringify({ projectId: run.job.projectId, sourceProjectId: run.job.projectId,
       ...(run.job.topicScope ? { topicScope: run.job.topicScope } : {}), currentTaskContext: run.job.prompt,
       evidence: run.correctionCatalog, catalog: topicCatalog(run.topic.existing),
-      quoteRepairWindow: quoteIds.length ? "one exact primary evidence binding per non-accepted claim; no prose changes" : null,
       existing: reviewExisting(run), priorSources: run.topic.priorSources, plan: run.topic.plan, pages: reviewPages(run),
       claims: draft.claims, revisions: contribution.topicRevisions }), tokens: 5000 });
 }
