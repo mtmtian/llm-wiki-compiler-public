@@ -6,13 +6,22 @@ import { sourceProjectIds } from "../utils/topic-scope.js";
 
 const QUESTION_WORDS = new Set(("这个 这次 当前 现在 之前 此前 以前 是否 怎么 如何 怎样 为什么 哪些 哪个 哪种 哪里 什么时候 多少 什么 还是 应该 需要 可以 一个 一下 我们 你们 仍 要 做 的 了 吗 呢 是 在 和 与 或 及 "
   + "the a an is are was were how why what which where when should can please this that do does did will would with for of to in on at and or").split(" "));
+/**
+ * Engineering-process words that say how work is delivered, not what the work is about. Every project's pages
+ * discuss merging, cleanup and verification, so these never count as shared evidence across projects.
+ */
+const WORKFLOW_TERMS = new Set(("合并 部署 上线 发布 重新 清理 收尾 提交 推送 分支 worktree 工作树 临时 临时文件 文件 本地 目录 仓库 缓存 插件 升级 新版 版本 更新 "
+  + "验证 检查 核对 修复 修改 处理 执行 运行 启动 测试 流程 过程 步骤 任务 工作 继续 开始 完成 完成后 结束 归档 通过 问题 没问题 会话 "
+  + "然后 等会 看下 看看 先 再 好了 另外 最后 直接 立刻 立即 "
+  + "pr ci cd merge deploy release branch commit push build test fix review verify check run").split(" "));
 const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
 const MIN_QUERY_COVERAGE = 0.3;
 const MIN_RELATIVE_LEXICAL_SCORE = 0.5;
 const SEMANTIC_ONLY_MINIMUM = 0.8;
 const SEMANTIC_SUPPORT_MINIMUM = 0.5;
 /**
- * Another project's decision needs several shared terms plus semantic agreement, not one coincidental word.
+ * Another project's decision needs several shared domain terms (workflow words excluded) plus semantic agreement,
+ * not one coincidental word.
  * Calibrated on labelled real prompts with local nomic-embed-text scores; recalibrate if the embedding model changes.
  * Without embeddings, broad lexical coverage is the fallback evidence.
  */
@@ -23,7 +32,10 @@ const CROSS_PROJECT_SEMANTIC_MINIMUM = 0.6;
 const MIN_CROSS_PROJECT_COVERAGE = 0.5;
 const RRF_OFFSET = 60;
 const HEADING_WEIGHT = 3;
-interface Candidate { section: DecisionSection; lexical: number; semantic: number; coverage: number; matches: number; headingMatch: boolean }
+interface Candidate {
+  section: DecisionSection; lexical: number; semantic: number; coverage: number;
+  matches: number; domainMatches: number; headingMatch: boolean;
+}
 
 /**
  * Scope and citation validation remain outside ranking; qualifications never establish relevance by themselves.
@@ -84,20 +96,20 @@ function scoreSection(section: DecisionSection, weights: Map<string, number>, hi
   const text = sectionText(section);
   const heading = clean(section.heading.split(" / ").at(-1) ?? "");
   const localText = `${heading}\n${clean(section.text)}`;
-  let lexical = 0; let matched = 0; let total = 0; let count = 0; let headingMatch = false;
+  let lexical = 0; let matched = 0; let total = 0; let count = 0; let domainCount = 0; let headingMatch = false;
   for (const [term, weight] of weights) {
     const inHeading = matches(heading, term);
     const weighted = weight * (inHeading ? HEADING_WEIGHT : 1);
     total += weight;
     if (!matches(text, term)) continue;
     matched += weight;
-    if (matches(localText, term)) count += 1;
+    if (matches(localText, term)) { count += 1; if (!WORKFLOW_TERMS.has(term)) domainCount += 1; }
     headingMatch ||= inHeading;
     lexical += weighted;
   }
   const semantic = Math.max(0, ...hits.filter(hit => hit.pageId === section.page.id && Number.isFinite(hit.score)
     && overlaps(section.text, hit.text)).map(hit => hit.score));
-  return { section, lexical, semantic, coverage: total ? matched / total : 0, matches: count, headingMatch };
+  return { section, lexical, semantic, coverage: total ? matched / total : 0, matches: count, domainMatches: domainCount, headingMatch };
 }
 
 /** Short topical questions can match one heading; broad body overlap needs multiple query terms. */
@@ -115,7 +127,7 @@ function admitted(candidate: Candidate, terms: number, currentProjectId: string 
   if (isLocal && candidate.semantic >= SEMANTIC_ONLY_MINIMUM) return true;
   if (!lexicalMatch(candidate, terms)) return false;
   if (isLocal) return true;
-  if (candidate.matches < MIN_CROSS_PROJECT_TERMS) return false;
+  if (candidate.domainMatches < MIN_CROSS_PROJECT_TERMS) return false;
   return semanticAvailable ? candidate.semantic >= CROSS_PROJECT_SEMANTIC_MINIMUM
     : candidate.coverage >= MIN_CROSS_PROJECT_COVERAGE;
 }

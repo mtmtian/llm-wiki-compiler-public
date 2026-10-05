@@ -217,6 +217,36 @@ describe("cross-project semantic gate", () => {
   });
 });
 
+describe("cross-project domain-term gate", () => {
+  const WORKFLOW_PAGE_TEXT = "合并前先清理分支，部署后再做收尾验证。";
+  const DOMAIN_PAGE_TEXT = "玩家存档与账号数据在更新中保留。";
+
+  async function runPage(text: string, sourceProjects: string[], prompt: string): Promise<string[]> {
+    const root = await semanticRoot();
+    const page = { ...semanticPage("domain-gate", sourceProjects, text), heading: "流程" };
+    await seedPages(root, [page]);
+    await seedEmbeddings(root, [page], page.slug);
+    const result = await buildTaskContext({ root, projectId: "project-a", scope: "semantic", prompt });
+    return result.evidence.map(item => item.pageId);
+  }
+
+  it("Given another project's page matching only workflow words, When asking to merge and deploy, Then it is not injected", async () => {
+    expect(await runPage(WORKFLOW_PAGE_TEXT, ["project-b"], "合并之后部署，然后清理收尾")).toEqual([]);
+  });
+
+  it("Given the same workflow-only match owned by the current project, When asking, Then it is injected", async () => {
+    expect(await runPage(WORKFLOW_PAGE_TEXT, ["project-a"], "合并之后部署，然后清理收尾")).toEqual(["concepts/domain-gate"]);
+  });
+
+  it("Given another project's page matching two domain words, When asking, Then it is injected", async () => {
+    expect(await runPage(DOMAIN_PAGE_TEXT, ["project-b"], "玩家存档和账号数据怎么处理")).toEqual(["concepts/domain-gate"]);
+  });
+
+  it("Given another project's page matching one domain word and workflow words, When asking, Then it is not injected", async () => {
+    expect(await runPage("ROAS 在合并部署时记录。", ["project-b"], "合并部署时 ROAS 怎么办")).toEqual([]);
+  });
+});
+
 describe("semantic MCP and topic navigation", () => {
   it("Given mixed frontmatter, When canonicalizing sources, Then deduplicates sorted IDs and keeps legacy ownership", () => {
     expect(sourceProjectIds({ sourceProjectIds: ["project-b", "", "project-a", "project-b"], projectId: "project-c" }))
