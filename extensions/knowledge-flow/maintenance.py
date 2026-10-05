@@ -17,6 +17,7 @@ from routing import resolve
 from exchange import announce_machine, exchange_status
 from review_capacity import QUEUE_FULL_ERROR
 from current_reviews import current_reviews
+from backlog_status import backlog_summary
 
 STATE_COUNT_DIRS = ("queue", "review", "failed", "audit", "completed", "capture-errors",
                     "capture-pending", "exchange-errors", "replica-errors")
@@ -197,11 +198,13 @@ def status_snapshot(config):
     maintenance = load_json(state / "maintenance.json", None)
     replica = load_json(state / "replica/status.json", None)
     active_reviews = active_review_summary(state)
+    audit = audit_status(state)
     return {"maintenance": ({"at": maintenance.get("at"), "counts": maintenance.get("counts", {})}
                             if isinstance(maintenance, dict) else None),
             "counts": {name: len(list((state / name).glob("*.json"))) for name in STATE_COUNT_DIRS},
             "activeReviewCount": len(active_reviews), "activeReviews": active_reviews,
-            "contextRead": context_read_summary(state), "audit": audit_status(state),
+            "contextRead": context_read_summary(state), "audit": audit,
+            "backlog": backlog_summary(state, audit["unresolvedQueueFull"]),
             "replica": replica if isinstance(replica, dict) else None,
             "lastSuccessfulSyncAt": replica.get("lastSuccessfulSyncAt")
             if isinstance(replica, dict) else None}
@@ -217,7 +220,8 @@ def report(config, evaluate=False):
     active_reviews = active_review_summary(state)
     result = {"at": now(), "counts": counts, "review": reviews,
               "activeReviewCount": len(active_reviews), "activeReviews": active_reviews,
-              "contextRead": context_read_summary(state)}
+              "contextRead": context_read_summary(state),
+              "backlog": backlog_summary(state, audit_status(state)["unresolvedQueueFull"])}
     if evaluate:
         result["checks"] = checks(config)
         shared = load_json(state / "replica/status.json", {}).get("sharedMaterialization", {})

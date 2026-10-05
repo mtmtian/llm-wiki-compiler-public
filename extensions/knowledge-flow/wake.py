@@ -22,6 +22,7 @@ from exchange import announce_machine, exchange_counts
 from queue_worker import process_queue
 from queue_schedule import next_wake_at, clock_value
 from capture_retry import process_capture_retries
+from backlog_status import backlog_summary, has_review_backlog
 
 
 UTC = dt.timezone.utc
@@ -54,8 +55,9 @@ def _event_enabled(config: dict[str, Any]) -> bool:
     return bool(config.get("enabled") and config.get("eventDriven", {}).get("enabled", False))
 
 
-def _reasons(before: dict[str, int], after: dict[str, int], drained: dict[str, Any]) -> list[str]:
-    """Turn counters and drain outcome into stable, user-readable wake reasons."""
+def _reasons(before: dict[str, int], after: dict[str, int], drained: dict[str, Any],
+             backlog: dict[str, Any] | None = None) -> list[str]:
+    """Turn counters, drain outcome and backlog into stable, user-readable wake reasons."""
     reasons = []
     if after.get("queue", 0):
         reasons.append("queue-pending")
@@ -69,6 +71,8 @@ def _reasons(before: dict[str, int], after: dict[str, int], drained: dict[str, A
         reasons.append("capture-errors")
     if after.get("capture-pending", 0):
         reasons.append("capture-pending")
+    if backlog and has_review_backlog(backlog):
+        reasons.append("review-backlog")
     if after.get("replica-errors", 0):
         reasons.append("replica-errors")
     if after.get("replica-conflicts", 0):
@@ -153,7 +157,8 @@ def run_once(config: dict[str, Any], invoke: Callable | None = None, clock=None,
                 "submitted": submissions.get("submitted", 0),
                 "unreceipted": submissions.get("unreceipted", 0),
                 "receipts": int(drained.get("receipts", 0))}
-    reasons = _reasons(before, counters, drained)
+    backlog = backlog_summary(state, at=now)
+    reasons = _reasons(before, counters, drained, backlog)
     path = state / "wake-state.json"
     previous = load_json(path, {}) or {}
     next_wake = next_wake_at(config, clock=clock) if enabled else None

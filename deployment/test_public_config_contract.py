@@ -102,7 +102,7 @@ class PublicConfigContractTests(unittest.TestCase):
             exchange["sharedWriter"] = {"version": 1, "bootstrapMachineId": "peer-b"}
         previous = {"version": 1, "enabled": True, "machineId": "peer-a",
                     "wikiRoot": str(self.root / "stale-replica"), "sharedWikiRoot": str(self.wiki),
-                    "stateDir": str(self.root / "private-state"), "model": "gpt-5.6-luna",
+                    "stateDir": str(self.root / "private-state"), "model": "gpt-6-luna",
                     "owners": ["sample-owner"], "workingForks": ["sample-owner/sample-fork"],
                     "checks": [{"name": "private-check", "projectId": "sample-project"}],
                     "projects": {"sample-project": {"label": "Private sample", "paths": ["/private/project"]}},
@@ -147,7 +147,7 @@ class PublicConfigContractTests(unittest.TestCase):
         source_path = self.root / "private-flow.json"
         source = {"version": 1, "enabled": True,
                   "wikiRoot": "${HOME}/private/replica/current",
-                  "stateDir": "${HOME}/private/state", "model": "gpt-5.6-luna",
+                  "stateDir": "${HOME}/private/state", "model": "gpt-6-luna",
                   "owners": ["sample-owner"], "workingForks": ["sample-owner/sample-fork"],
                   "checks": [{"name": "external-check", "projectId": "sample-project"}],
                   "projects": {"sample-project": {"label": "Sample", "paths": ["${HOME}/template/project"]}},

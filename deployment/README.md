@@ -287,6 +287,12 @@ artifact 引文形成历史非决定材料）并丢弃从用户主证据继承�
 新容量等待还须有等待名额。无名额时保留完整输入并报告可见的采集失败，不丢失证据或伪记待审。
 同一问题的有效线性 `reviewRetryOf` 链只占一个当前待审名额；历史审计仍保留，异常链不会静默合并。
 完整规则见 [Knowledge-flow recovery contract](KNOWLEDGE-FLOW-RECOVERY.md)。
+待审上限调大后不再阻塞采集，积压改由维护检查暴露：`llmwiki-maintain --check`（写入 `maintenance.json`）与只读的
+`--status` 都输出 `backlog`：`reviewsByProject` 为各项目当前待审数（只算当前血缘头）和最老待审的 `oldestAgeHours`；
+`unresolvedQueueFullByProject` 为各项目尚未处理的旧版待审已满审计记录数（与 `audit.unresolvedQueueFull` 同源）；
+`captureWaitsByProject` 为各项目 `capture-pending` 容量等待的 `count`、`reason` 与最老等待的 `oldestAgeHours`。
+年龄按 `createdAt` 计算，缺失或无法解析时为 `null`；损坏文件被跳过，不影响检查。
+唤醒状态的 `reasons` 在任一项目当前待审达到 10 条、或存在容量等待时追加一个 `review-backlog`，不按项目拆分。
 已有待审项不会随升级自动批准。修复原因后，可逐项先检查再加入普通队列：
 
 ```sh
