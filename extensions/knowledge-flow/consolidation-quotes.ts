@@ -31,13 +31,15 @@ export function buildCorrectionEvidence(evidence: readonly FlowEvidence[]): Corr
   }));
 }
 
-/** Restore the source binding from one globally unique quote selector. */
+/** Restore the source binding, with its role, from one globally unique quote selector. */
 export function resolveQuote(
   catalog: readonly CorrectionEvidence[], quoteId: string,
-): QuoteOption {
-  const option = catalog.flatMap(item => item.quoteOptions).find(item => item.quoteId === quoteId);
-  if (!option) throw new Error(`unknown correction quoteId: ${quoteId}`);
-  return { ...option, quote: trimBoundaryCarriageReturn(option.quote) };
+): QuoteOption & { role: FlowEvidence["kind"] } {
+  for (const item of catalog) {
+    const option = item.quoteOptions.find(candidate => candidate.quoteId === quoteId);
+    if (option) return { ...option, quote: trimBoundaryCarriageReturn(option.quote), role: item.kind };
+  }
+  throw new Error(`unknown correction quoteId: ${quoteId}`);
 }
 
 function splitQuotes(evidenceId: string, text: string): QuoteOption[] {
