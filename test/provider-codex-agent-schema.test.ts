@@ -3,6 +3,8 @@
  *
  * The fake `codex` process observes the wire schema while the provider still
  * validates the returned value against the caller's original JSON Schema.
+ * Use the production timeout here; deadline behavior has deterministic coverage
+ * in provider-codex-agent.test.ts, and Vitest still bounds a stalled schema test.
  */
 
 import { access } from "node:fs/promises";
@@ -64,7 +66,7 @@ describe("CodexAgentProvider strict schema compatibility", () => {
   it("strictifies nested schemas without mutating the caller schema", async () => {
     const original = structuredClone(NESTED_TOOL.input_schema);
     const fake = await useFake({ title: "ok", metadata: { source: "source-a" } });
-    const provider = new CodexAgentProvider(undefined, { timeoutMs: 2_000 });
+    const provider = new CodexAgentProvider();
 
     await expect(provider.toolCall("system", [{ role: "user", content: "x" }], [NESTED_TOOL], 99))
       .resolves.toBe('{"title":"ok","metadata":{"source":"source-a"}}');
@@ -91,7 +93,7 @@ describe("CodexAgentProvider strict schema compatibility", () => {
 
   it("keeps validating structured output against the original schema", async () => {
     const fake = await useFake({ title: "ok", metadata: { source: 42 } });
-    const provider = new CodexAgentProvider(undefined, { timeoutMs: 2_000 });
+    const provider = new CodexAgentProvider();
 
     await expect(provider.toolCall("system", [{ role: "user", content: "x" }], [NESTED_TOOL], 99))
       .rejects.toThrow(/schema validation/i);
