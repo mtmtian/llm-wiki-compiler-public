@@ -15,13 +15,15 @@ export function duplicateSelection(left: TaskSelection, right: TaskSelection): b
   return left.origin === "ledger" && right.origin === "page" && representsOnlyClaim(right.section, left.claim);
 }
 
-/** Resolve the page's citations before treating the sealed record link as a budget-saving duplicate. */
+/** Preserve every resolved source, including distinct sources that repeat the same quoted text. */
 export function duplicateEvidence(left: SelectedEvidence, right: SelectedEvidence): boolean {
   if (!duplicateSelection(left.selection, right.selection)) return false;
   const ledger = left.evidence.origin === "ledger" ? left.evidence : right.evidence;
   const page = left.evidence.origin === "ledger" ? right.evidence : left.evidence;
-  return ledger.origin === "ledger" && page.origin !== "ledger"
-    && ledger.quotes.every(quote => page.sources.some(source => source.text === quote.quote));
+  if (ledger.origin !== "ledger" || page.origin === "ledger") return false;
+  const quoteTexts = ledger.quotes.map(quote => quote.quote).sort();
+  const sourceTexts = page.sources.map(source => source.text).sort();
+  return quoteTexts.length === sourceTexts.length && quoteTexts.every((quote, index) => quote === sourceTexts[index]);
 }
 
 /** Exact paragraphs preserve negations; only the known publication status wrapper is non-knowledge text. */

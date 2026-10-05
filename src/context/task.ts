@@ -125,6 +125,7 @@ function fitsEvidenceBudget(evidence: TaskEvidence[]): boolean {
     && evidence.reduce((total, item) => total + evidenceSize(item), 0) <= MAX_EVIDENCE_CHARS;
 }
 
+/** Include provenance and qualifications in the shared serialized evidence budget. */
 function evidenceSize(evidence: TaskEvidence): number { return JSON.stringify(evidence).length; }
 
 /** Each origin resolves through its own provenance boundary before consuming the shared budget. */

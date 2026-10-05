@@ -78,4 +78,24 @@ describe("page and ledger evidence share one budget", () => {
     expect(result.evidence).toHaveLength(2);
     expect(result.evidence.some(item => item.origin !== "ledger" && item.text.includes(additional))).toBe(true);
   });
+
+  it.each(["原始材料另有一条补充说明。", CLAIM_TEXT])(
+    "Given equivalent prose has an additional cited source, When retrieving, Then its extra provenance stays available: %s", async additional => {
+      await writeReviewedClaims(root.dir, [reviewedClaim({ equivalentPageRefs: [PAGE_REF] })]);
+      await retryPage({ extra: "^[retry.md:2]", sourceSupplement: additional });
+      const result = await query();
+      expect(result.evidence).toHaveLength(2);
+      expect(result.evidence.some(item => item.origin !== "ledger"
+        && item.sources.some(source => source.text === additional))).toBe(true);
+    });
+
+  it.each([false, true])("Given repeated ledger quotes, When page source multiplicity matches=%s, Then only matching evidence merges", async matches => {
+    const claim = reviewedClaim();
+    const quotes = [...claim.quotes, { ...claim.quotes[0], evidenceId: "user-2", locator: "turn:synthetic-2" }];
+    await writeReviewedClaims(root.dir, [reviewedClaim({ equivalentPageRefs: [PAGE_REF], quotes })]);
+    await retryPage(matches ? { extra: "^[retry.md:2]", sourceSupplement: CLAIM_TEXT } : {});
+    const result = await query();
+    expect(result.evidence).toHaveLength(matches ? 1 : 2);
+    expect(result.evidence.find(item => item.origin !== "ledger")?.sources).toHaveLength(matches ? 2 : 1);
+  });
 });
