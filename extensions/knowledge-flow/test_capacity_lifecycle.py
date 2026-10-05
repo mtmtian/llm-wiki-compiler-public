@@ -11,6 +11,7 @@ from common import load_json, save_json
 from capture_retry import process_capture_retries
 from hooks import enqueue_job
 from queue_worker import process_queue
+from session_schedule import DEFAULT_QUIET_SECONDS
 
 
 UTC = dt.timezone.utc
@@ -140,12 +141,14 @@ class CapacityLifecycleTests(unittest.TestCase):
 
         process_queue(self.config, refuse_after_claim, clock=lambda: self.now)
 
-        restored = process_capture_retries(
-            self.config, dt.datetime.fromisoformat(pending["nextAttemptAt"]) + dt.timedelta(seconds=1))
+        restored_at = max(self.now, dt.datetime.fromisoformat(pending["nextAttemptAt"])) + dt.timedelta(seconds=1)
+        restored = process_capture_retries(self.config, restored_at)
+        # Restoring a source starts its normal quiet period; never move the worker clock backwards.
+        resumed_at = restored_at + dt.timedelta(seconds=DEFAULT_QUIET_SECONDS + 1)
         resumed = process_queue(self.config,
             lambda _config, _command, payload, _timeout: calls.append(payload["job"]["projectId"])
             or {"status": "empty", "publishedPageIds": []},
-            clock=lambda: self.now + dt.timedelta(seconds=400))
+            clock=lambda: resumed_at)
 
         self.assertEqual(restored["recovered"], 1)
         self.assertEqual(calls, ["p", "q"])
@@ -189,14 +192,14 @@ class CapacityLifecycleTests(unittest.TestCase):
             return {"status": "deferred", "error": "review queue is full", "reviewCount": 0}
 
         process_queue(self.config, refuse_after_claim, clock=lambda: self.now)
-        process_capture_retries(
-            self.config, dt.datetime.fromisoformat(pending["nextAttemptAt"]) + dt.timedelta(seconds=1))
+        restored_at = max(self.now, dt.datetime.fromisoformat(pending["nextAttemptAt"])) + dt.timedelta(seconds=1)
+        process_capture_retries(self.config, restored_at)
         self.assertTrue((self.state / "queue/other.json").exists())
         (self.state / "review/p-held.json").unlink()
 
         first = process_queue(self.config,
             lambda _config, _command, payload, _timeout: {"status": "empty", "publishedPageIds": []},
-            limit=1, clock=lambda: self.now + dt.timedelta(seconds=400))
+            limit=1, clock=lambda: restored_at + dt.timedelta(seconds=DEFAULT_QUIET_SECONDS + 1))
         claimed_audit = next(load_json(path) for path in (self.state / "batches").glob("*.json")
                              if load_json(path).get("queueFiles") == ["claimed.json"])
 
