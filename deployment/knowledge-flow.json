@@ -15,7 +15,7 @@
     "quietSeconds": 300,
     "maxWaitSeconds": 1800
   },
-  "model": "gpt-5.6-luna",
+  "model": "gpt-6-luna",
   "maxProposals": 5,
   "maxPendingPerProject": 10,
   "maxQueuedJobs": 30,
