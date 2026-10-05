@@ -91,10 +91,11 @@ The editor receives each existing page's `citationChecklist` and must keep or re
 The independent reviewer can accept an explicit user change while preserving useful
 prior rationale, constraints and counterexamples. It holds unresolved conflicts and uncertain
 intent. Multi-turn approvals retain both original proposal and approval quotes.
-The reviewer also returns a conclusion for each claim (`claimDecisions`); each review attempt's conclusions travel on the batch result as `claimReviews`, and a missing or incomplete list is recorded as incomplete rather than holding the batch. The page-level decision still decides whether a batch publishes or is held, with one refinement: when the final review rejects some claims but accepts others, `claim-pruning.ts` removes the lines citing the rejected claims (only when they carry no accepted claim and no existing citation, and drops a heading left empty by the removal), renumbers the rest, and the reduced draft is validated and reviewed again as stage `pruned` (a page whose claims were all rejected leaves the plan for that review and keeps its current text); it publishes only if that fresh review accepts it, and any other outcome holds the batch with the original reason plus the cause. When the knowledge-ledger gate is enabled (`deployment/KNOWLEDGE-LEDGER.md` §7), a held batch whose final review accepted some claims publishes exactly those claims, with only the evidence they cite, as one ledger record (version 3) and stays held; a closed gate, an unready reader or a contract violation publishes nothing and records `ledgerError`.
+The reviewer also returns a conclusion for each claim (`claimDecisions`); each review attempt's conclusions travel on the batch result as `claimReviews`, and a missing or incomplete list is recorded as incomplete rather than holding the batch. The page-level decision still decides whether a batch publishes or is held, with one refinement: when the final review rejects some claims but accepts others, `claim-pruning.ts` removes the lines citing the rejected claims (only when they carry no accepted claim and no existing citation, and drops a heading left empty by the removal), renumbers the rest, and the reduced draft is validated and reviewed again as stage `pruned` (a page whose claims were all rejected leaves the plan for that review and keeps its current text); it publishes only if that fresh review accepts it, and a rejection remains a technical failure unless a review identifies unresolved user intent. Diagnostics preserve the original reason plus the correction or pruning failure. When the knowledge-ledger gate is enabled (`deployment/KNOWLEDGE-LEDGER.md` §7), a held or terminally failed batch whose complete final claim review accepted some claims publishes exactly those claims, with only the evidence they cite, as one ledger record (version 3), retaining its unresolved page outcome; a closed gate, an unready reader or a contract violation publishes nothing and records `ledgerError`.
 The editor and reviewer also receive original files cited by the prior page;
-missing sources stop the batch for review. One bounded correction may address
-review findings. Invalid routing or incomplete review coverage is held with the
+unavailable sources stop the batch as a retryable technical failure. One bounded
+correction may address review findings. Invalid routing or incomplete review
+coverage remains a technical failure with the
 frozen inputs and model stages available in the private audit.
 Replica replay verifies the prior hash and holds concurrent whole-page variants.
 It never asks a model to reinterpret the record on another machine. MOC navigation
@@ -269,7 +270,53 @@ node extensions/knowledge-flow/build.mjs /absolute/runtime/knowledge-flow
 
 The built worker needs the compiler's pinned production dependencies in an ancestor `node_modules` directory. `build.mjs` copies the Python adapter, queue/reconcile worker (`capture.py`, `queue_worker.py`, `wake.py`), and maintenance command. Keep the runtime immutable and switch private configuration only after validation.
 
-The private JSON configuration requires `version: 1`, `enabled`, absolute `wikiRoot`, `stateDir`, `node`, `worker`, and the routing tables. For v2, `exchange.materializerMachineId` is the one allowed shared-page writer; an absent value disables that projection. Model default for this installation is `gpt-5.6-luna`; its reasoning effort uses the Codex model default. Limits are `maxProposals: 5`, `maxPendingPerProject: 10`, `maxQueuedJobs: 30`, `maxJobBytes: 120000`, `maxProcessEventBytes: 600000`, and `maxDailyJobs: 300` model-processing attempts per UTC day. The byte limits are measured on UTF-8 serialized JSON, including the config/envelope overhead sent to Node. Oversized jobs are isolated before model invocation. The daily budget counts model-processing attempts, not sessions or queued jobs. Deferred jobs remain queued. When a project already holds `maxPendingPerProject` reviews, its unclaimed work waits in the queue before any batch claim, replica pin, model call or budget use (wake reason `review-queue-full`) while waiting work occupies at most half of `maxQueuedJobs`; already claimed batches continue so their results can finalize; beyond that the batch is recorded as a `review queue is full` hold, which `--retry-review` can reprocess once the project has room. Three failed attempts move a job to `failed/` for diagnosis instead of indefinitely blocking the queue; once the cause is fixed, `--requeue-failed JOB_ID` (with `--dry-run` to inspect) sends that turn, or one intake refused as too large, through ordinary intake again as a new job with today's session context, and archives the failure in `resolved/`. A saved result whose own content fails the publication contract (for example, one drafted before the current evidence-role rules) is not retried, because the same result would fail every time: the batch completes as a `needs_review` hold whose review names the violation, the rejected result stays in the batch audit, and `--retry-review` drafts it again under the current contract and topic scope (a hold from before semantic topics is retried as a semantic job, like new intake). Other publication failures keep their bounded backoff. If a multi-turn batch is interrupted after one source reaches a terminal state, the audit remains the authoritative frozen basis and the remaining sources are quarantined as `batch-failed` without a new model invocation.
+The private JSON configuration requires `version: 1`, `enabled`, absolute `wikiRoot`, `stateDir`, `node`, `worker`, and the routing tables. For v2, `exchange.materializerMachineId` is the one allowed shared-page writer; an absent value disables that projection. Model default for this installation is `gpt-5.6-luna`; its reasoning effort uses the Codex model default. Limits are `maxProposals: 5`, `maxPendingPerProject: 10`, `maxQueuedJobs: 30`, `maxJobBytes: 120000`, `maxProcessEventBytes: 600000`, and `maxDailyJobs: 300` model-processing attempts per UTC day. The byte limits are measured on UTF-8 serialized JSON, including the config/envelope overhead sent to Node. Oversized jobs are isolated before model invocation. The daily budget counts model-processing attempts, not sessions or queued jobs.
+
+Capacity waiting, technical failure and human review have distinct local outcomes:
+
+| Condition | Durable behavior | Recovery |
+| --- | --- | --- |
+| Project review capacity or intake queue is full | An unclaimed complete input waits in `capture-pending` as `kind: capacity`; no human hold or successful completion is created | Wake checks capacity before restoring the exact frozen job; no transcript recapture or capture-attempt TTL |
+| Temporary execution or source-read failure | Existing bounded backoff preserves the frozen batch | Three failed attempts retain the input in `failed/` |
+| Invalid frozen output, exhausted validation correction or incomplete review coverage | `error` with `retryable: false`; no new human review slot | Repair the cause, then explicitly requeue a new attempt |
+| Actual decision conflict or uncertain user intent | One current `needs_review` item | Supply the missing decision evidence and retry; publication still requires independent review |
+| Accepted content or reviewed unchanged draft | Existing publication or `empty` behavior | Verify the publication is visible, or inspect the recorded no-change explanation |
+
+Admission happens before claiming new work or charging the processing budget. Blocked,
+unclaimed jobs move out of the runnable queue so another project's work can proceed;
+claimed batches keep their source files and recover against their original basis. A
+verified claimed batch deferred by capacity counts as waiting even though its frozen
+source files remain under `queue/`. Runnable sources are bounded by `maxQueuedJobs`;
+all admitted runnable and capacity-waiting sources together are bounded by twice that
+limit. New waiting inputs also require fewer than `maxQueuedJobs` current waiting
+sources. An already admitted batch may move from runnable to waiting without losing
+its input, but resuming it must respect the runnable limit again. Each job retains
+`maxJobBytes` protection. If admission has no slot, the complete input becomes a visible
+admission failure. Audit and failed records remain durable diagnosis history; these
+limits do not bound all historical disk usage. A capacity guard reached only after
+invoking Node still consumes one daily processing attempt; it is never refunded.
+
+Review records carry their explicit `reviewRetryOf` relationship. A valid same-project
+linear chain occupies one active review slot even when a crash leaves ancestor and
+successor files together. Cycles, forks and invalid identities are counted separately.
+A replacement retry excludes only its own valid chain. Legacy records without links
+remain independent. Historical `review queue is full` audits stay unchanged; an explicit
+retry whose prior attempt ended with that old capacity result starts a new attempt.
+
+A technical failure keeps its model diagnostics and original inputs. With the existing
+knowledge-ledger gate enabled, claims accepted by a complete independent claim review
+still use the same idempotent ledger export before the failed batch is finalized. This
+does not publish rejected page text or retire an original human hold. `completed` means
+an attempt terminated, not that an earlier decision was resolved.
+
+After correcting a technical cause, `--requeue-failed JOB_ID` (with `--dry-run` to inspect)
+uses ordinary intake with a new identity and current session context, then archives the
+original failure in `resolved/`. A saved result that violates the publication contract
+is a permanent technical failure; it is not retried as unchanged output or converted
+into a human hold. Other publication failures keep their recoverable backoff. If a
+multi-turn batch is interrupted after one source reaches a terminal state, its audit
+remains the authoritative frozen basis and the remaining sources are quarantined as
+`batch-failed` without another model invocation.
 
 Append the following command to the existing global hooks, preserving all unrelated entries:
 

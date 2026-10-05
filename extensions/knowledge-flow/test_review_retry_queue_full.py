@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from common import load_json, save_json
+from admission_usage import source_hash
 from queue_worker import process_queue
 from review_capacity import QUEUE_FULL_ERROR
 from review_retry import retry_review
@@ -80,7 +81,7 @@ class QueueFullRetryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.retry(dry_run=True)
         (self.state / "audit/batch-full.json").unlink()
-        with self.assertRaises(FileNotFoundError):
+        with self.assertRaisesRegex(ValueError, "completed held session"):
             self.retry(dry_run=True)
 
     def test_full_project_refuses_to_stage_because_the_retry_frees_no_slot(self):
@@ -91,6 +92,23 @@ class QueueFullRetryTests(unittest.TestCase):
             self.retry()
         self.assertEqual(list((self.state / "queue").glob("*.json")), [])
 
+    def test_claimed_capacity_wait_uses_a_logical_runnable_slot(self):
+        """A claimed deferred file occupies bytes, not the last runnable slot."""
+        self.config["maxQueuedJobs"] = 1
+        source = {"id": "claimed-source", "projectId": "other", "prompt": "held"}
+        save_json(self.state / "queue/claimed-source.json", source)
+        audit = {"batchId": "batch-wait", "status": "capacity-deferred",
+                 "queueFiles": ["claimed-source.json"],
+                 "queueSourceHashes": {"claimed-source.json": source_hash(source)},
+                 "job": {"id": "batch-wait", "sourceJobIds": ["claimed-source"],
+                         "sourceQueueFiles": ["claimed-source.json"]}}
+        save_json(self.state / "batches/batch-wait.json", audit)
+
+        result = self.retry()
+
+        self.assertEqual(result["status"], "queued")
+        self.assertTrue((self.state / "queue" / (result["retryJobId"] + ".json")).is_file())
+
     def test_refused_again_keeps_the_original_hold_without_finalize_errors(self):
         """Given a race that refills the project, a repeated refusal leaves the hold as it was."""
         self.retry()
@@ -99,6 +117,20 @@ class QueueFullRetryTests(unittest.TestCase):
         self.assertEqual(result["finalizeErrors"], 0)
         self.assertFalse((self.state / "resolved/batch-full.json").exists())
         self.assertTrue((self.state / "audit/batch-full.json").exists())
+
+    def test_explicit_retry_after_legacy_refusal_starts_a_new_attempt(self):
+        """A completed legacy queue-full retry is a refusal, not a reusable success."""
+        original_audit = (self.state / "audit/batch-full.json").read_bytes()
+        first = self.retry()
+        self.drain({"status": "needs_review", "publishedPageIds": [], "reviewCount": 1,
+                    "error": QUEUE_FULL_ERROR})
+
+        second = self.retry()
+
+        self.assertNotEqual(first["retryJobId"], second["retryJobId"])
+        self.assertEqual(second["status"], "queued")
+        self.assertTrue((self.state / "queue" / (second["retryJobId"] + ".json")).exists())
+        self.assertEqual((self.state / "audit/batch-full.json").read_bytes(), original_audit)
 
     def test_dismissed_audit_anchor_cannot_be_retried(self):
         """A durable audit dismissal blocks dry-run and preserves the original refusal bytes."""

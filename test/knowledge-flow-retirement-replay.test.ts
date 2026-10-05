@@ -232,13 +232,14 @@ describe("reviewed citation retirement replay", () => {
     expect(() => validateRetirementReferences([forged], ["没有对应的原始证据"])).toThrow(/original evidence/);
   });
 
-  it("holds a new-evidence URL that quoteContribution would otherwise narrow away", async () => {
+  it("rejects a new-evidence URL that quoteContribution would otherwise narrow away", async () => {
     const config = await topicFixture(); const url = "https://example.com/unquoted";
     const previous = `---\ntitle: 旧发布\nprojectId: companion\nknowledgeTopic: 样例素材推广\nknowledgeDecisionObject: 样例项目首轮素材测试\n---\n\n旧过程 ^[legacy.md:1]\n`;
     await writeFile(path.join(config.wikiRoot, "wiki", "concepts", "replay.md"), previous);
     await mkdir(path.join(config.wikiRoot, "sources"), { recursive: true });
     await writeFile(path.join(config.wikiRoot, "sources", "legacy.md"), "历史过程，无外部链接。\n");
     const result = await consolidateSession(consolidationJob(url), consolidationConfig(config, url), new Map([[pageId, previous]]));
-    expect(result.status).toBe("needs_review"); expect(result.error).toMatch(/original evidence/); expect(result.contribution).toBeUndefined();
+    expect(result).toMatchObject({ status: "error", retryable: false });
+    expect(result.error).toMatch(/original evidence/); expect(result.contribution).toBeUndefined();
   });
 });

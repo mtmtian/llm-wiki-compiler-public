@@ -8,10 +8,10 @@ import type { LLMProvider } from "../../src/utils/provider.js";
 import type { ClaimDecision, ClaimReview, FlowConfig, FlowJob, FlowResult } from "./types.js";
 import { claimReview, finishResult } from "./claim-decisions.js";
 import { createPlanTool, createQuoteBoundEditTool, createTopicReviewTool, planTool } from "./consolidation-schema.js";
-import { durableModel } from "./consolidation-model.js";
+import { ConsolidationOutputError, durableModel } from "./consolidation-model.js";
 import { assertTopicContextBudget, resolvePlan, topicCatalog } from "./consolidation-plan.js";
 import type { TopicPlan, PlannedPage } from "./consolidation-plan.js";
-import { resolveQuoteBoundDraft, unchangedRevisions, validatedDraft, withSessionEvidence } from "./consolidation-draft.js";
+import { resolveQuoteBoundDraft, unchangedRevisions, UncertainClaimsError, validatedDraft, withSessionEvidence } from "./consolidation-draft.js";
 import type { QuoteBoundTopicDraft, StableClaimEntry, TopicDraft } from "./consolidation-draft.js";
 import { planningCorrectionPrompt, planningPrompt, planSystem, editSystem, correctionEditSystem, reviewSystem, withTopicScope } from "./consolidation-prompts.js";
 import { buildCorrectionEvidence } from "./consolidation-quotes.js";
@@ -52,29 +52,36 @@ export async function consolidateSession(input: FlowJob, config: FlowConfig, exi
   let pages: PlannedPage[];
   let priorSources: Record<string, string>;
   try {
-    pages = resolvePlan(plan, job, existing);
+    pages = checkedPlan(plan, job, existing);
   } catch (error) {
     const reason = errorMessage(error);
     try {
       const corrected = await durableModel<{ plan: TopicPlan }>({ ...request, stage: "correction", tool: createPlanTool(job.allowedPageIds), system: withTopicScope(job, planSystem),
         prompt: planningCorrectionPrompt(job, existing, plan, reason), tokens: 5000 });
       plan = corrected.plan;
-      pages = resolvePlan(plan, job, existing);
+      pages = checkedPlan(plan, job, existing);
     } catch (correctionError) {
-      return held(job, `${reason}; ${errorMessage(correctionError)}`, plan.summary);
+      return failed(job, `${reason}; ${errorMessage(correctionError)}`, plan.summary,
+        !(correctionError instanceof ConsolidationOutputError));
     }
   }
   if (job.topicScope === "semantic") {
     try { assertTopicContextBudget(existing, pages.map(page => page.pageId)); }
-    catch (error) { return held(job, errorMessage(error), plan.summary); }
+    catch (error) { return failed(job, errorMessage(error), plan.summary); }
   }
   try {
     priorSources = await priorSourceContext(config.wikiRoot, pages);
   } catch (error) {
-    return held(job, errorMessage(error), plan.summary);
+    return failed(job, errorMessage(error), plan.summary, true);
   }
   if (plan.disposition !== "edit") return disposition(plan, job);
   return editAndReview(job, config, { existing, plan, pages, priorSources });
+}
+
+/** Plan validation is deterministic; model transport failures keep their distinct retry contract. */
+function checkedPlan(plan: TopicPlan, job: FlowJob, existing: ReadonlyMap<string, string>): PlannedPage[] {
+  try { return resolvePlan(plan, job, existing); }
+  catch (error) { throw new ConsolidationOutputError(errorMessage(error)); }
 }
 
 interface EditContext { existing: ReadonlyMap<string, string>; plan: TopicPlan; pages: PlannedPage[]; priorSources: Record<string, string>; }
@@ -87,7 +94,10 @@ async function editAndReview(job: FlowJob, config: FlowConfig, context: EditCont
     correctionCatalog: buildCorrectionEvidence(job.evidence), claimReviews: [], stableClaims: [] };
   let correction: DraftCorrection | undefined;
   for (const stage of [undefined, "correction"]) {
-    const outcome = await runEditStage(run, stage, correction);
+    let outcome: EditStageResult;
+    try { outcome = await runEditStage(run, stage, correction); }
+    catch (error) { outcome = { result: failed(job, errorMessage(error), context.plan.summary,
+      !(error instanceof ConsolidationOutputError)) }; }
     if (outcome.result) {
       return finishResult(outcome.result, run.claimReviews, { enabled: config.knowledgeLedger === true, reviewed: run.reviewed });
     }
@@ -116,7 +126,7 @@ interface EditStageResult { result?: FlowResult; correction?: DraftCorrection; }
 async function runEditStage(run: EditRunContext, stage: string | undefined,
   correction: DraftCorrection | undefined): Promise<EditStageResult> {
   const attempt = await draftAttempt(run, stage, correction);
-  if (!attempt.ok) return { result: held(run.job, attempt.error, correction?.previousDraft.summary ?? "") };
+  if (!attempt.ok) return { result: failed(run.job, attempt.error, correction?.previousDraft.summary ?? "") };
   run.stableClaims = attempt.stableClaims;
   const draft = withRepairedCitations(attempt.draft, run.topic.pages);
   return validateAndReviewStage(run, stage, correction, draft, attempt.stableClaims);
@@ -125,7 +135,8 @@ async function runEditStage(run: EditRunContext, stage: string | undefined,
 async function validateAndReviewStage(run: EditRunContext, stage: string | undefined,
   correction: DraftCorrection | undefined, draft: TopicDraft, stableClaims: StableClaimEntry[]): Promise<EditStageResult> {
   const outcome = await reviewedDraft(run, stage, draft);
-  if ("error" in outcome) return validationFailure(run, stage, correction, draft, stableClaims, outcome.error);
+  if ("error" in outcome) return outcome.requiresDecision
+    ? { result: held(run.job, outcome.error, draft.summary) } : validationFailure(run, stage, correction, draft, stableClaims, outcome.error);
   const { review, contribution } = outcome;
   if (review.decision === "accept") return { result: acceptedReview(run.job, draft.summary, review, contribution, run.topic.pages) };
   if (finalRejection(review, stage)) return { result: await acceptedClaimsOnly(run, draft, review) };
@@ -134,17 +145,17 @@ async function validateAndReviewStage(run: EditRunContext, stage: string | undef
     const permissions = correctionPermissionsForReview(reviewedClaims, review);
     return { correction: { reason: review.reason, previousDraft: draft, stableClaims: reviewedClaims, permissions, review } };
   } catch (error) {
-    return { result: held(run.job, errorMessage(error), draft.summary) };
+    return { result: failed(run.job, errorMessage(error), draft.summary) };
   }
 }
 
-type ReviewedDraft = { review: TopicReview; contribution: NonNullable<FlowResult["contribution"]> } | { error: string };
+type ReviewedDraft = { review: TopicReview; contribution: NonNullable<FlowResult["contribution"]> } | { error: string; requiresDecision?: boolean };
 
 /** Validate a draft and, when it is valid, review it and record the per-claim conclusions. */
 async function reviewedDraft(run: EditRunContext, stage: string | undefined, draft: TopicDraft): Promise<ReviewedDraft> {
   let contribution: NonNullable<FlowResult["contribution"]>;
   try { contribution = checkedContribution(draft, run.job, run.topic.pages, run.config.maxProposals, run.topic.priorSources); }
-  catch (error) { return { error: errorMessage(error) }; }
+  catch (error) { return { error: errorMessage(error), requiresDecision: error instanceof UncertainClaimsError }; }
   const review = await reviewAttempt(run, stage, draft, contribution);
   run.claimReviews.push(claimReview(stage, review, contribution.claims.length));
   run.reviewed = contribution;
@@ -153,10 +164,11 @@ async function reviewedDraft(run: EditRunContext, stage: string | undefined, dra
 
 /**
  * After a final rejection, publish the accepted claims alone when they pass validation and a fresh review
- * (claim-pruning.ts). This step is optional: any failure in it holds the batch exactly as before, with the cause.
+ * (claim-pruning.ts). An unresolved intent remains held; an invalid edit remains a technical failure.
  */
 async function acceptedClaimsOnly(run: EditRunContext, draft: TopicDraft, review: TopicReview): Promise<FlowResult> {
-  const heldWith = (note?: string) => held(run.job, note ? `${review.reason}；只保留已接受的 claim 后${note}` : review.reason, draft.summary);
+  const heldWith = (note?: string) => (review.decision === "needs_review" ? held : failed)(run.job,
+    note ? `${review.reason}；只保留已接受的 claim 后${note}` : review.reason, draft.summary);
   const pruned = withoutRejectedClaims(draft, run.claimReviews.at(-1));
   if (!pruned) return heldWith();
   // Pages whose claims were all rejected keep their current text, so validation, the fresh review and its
@@ -164,8 +176,14 @@ async function acceptedClaimsOnly(run: EditRunContext, draft: TopicDraft, review
   run.topic = narrowedTopic(run.topic, pruned);
   let outcome: ReviewedDraft;
   try { outcome = await reviewedDraft(run, PRUNED_STAGE, pruned); }
-  catch (error) { return heldWith(`审核失败：${errorMessage(error)}`); }
+  catch (error) {
+    if (review.decision === "needs_review") return heldWith(`审核失败：${errorMessage(error)}`);
+    return failed(run.job, `${review.reason}；只保留已接受的 claim 后审核失败：${errorMessage(error)}`,
+      draft.summary, !(error instanceof ConsolidationOutputError));
+  }
   if ("error" in outcome) return heldWith(`未通过校验：${outcome.error}`);
+  if (outcome.review.decision === "needs_review") return held(run.job,
+    `${review.reason}；只保留已接受的 claim 后仍需确认：${outcome.review.reason}`, draft.summary);
   if (outcome.review.decision !== "accept") return heldWith(`仍未通过审核：${outcome.review.reason}`);
   return acceptedReview(run.job, pruned.summary, outcome.review, outcome.contribution, run.topic.pages);
 }
@@ -182,7 +200,7 @@ function validationFailure(run: EditRunContext, stage: string | undefined, corre
   draft: TopicDraft, stableClaims: StableClaimEntry[], reason: string): EditStageResult {
   if (!stage) return { correction: { reason, previousDraft: draft, stableClaims,
     permissions: { lockedClaimIds: [], replaceEvidenceForClaimIds: [] } } };
-  return { result: held(run.job, reason, draft.summary ?? correction?.previousDraft.summary ?? "") };
+  return { result: failed(run.job, reason, draft.summary ?? correction?.previousDraft.summary ?? "") };
 }
 
 async function draftAttempt(run: EditRunContext, stage: string | undefined,
@@ -190,12 +208,20 @@ async function draftAttempt(run: EditRunContext, stage: string | undefined,
   const tool = draftTool(run, stage, correction);
   try {
     const modelDraft = await loadDraftModel(run, stage, correction, tool);
-    const restored = restoreDraft(stage, modelDraft, correction, run.correctionCatalog, run.topic.pages);
-    return { ok: true, draft: withKeptParagraphs(restored.draft, run.topic.pages), stableClaims: restored.stableClaims };
+    return { ok: true, ...restoredDraft(stage, modelDraft, correction, run) };
   } catch (error) {
-    if (!stage) throw error;
+    if (!stage || !(error instanceof ConsolidationOutputError)) throw error;
     return { ok: false, error: `correction evidence selection failed: ${errorMessage(error)}` };
   }
+}
+
+/** Materialization errors describe invalid returned data, not an unavailable model transport. */
+function restoredDraft(stage: string | undefined, modelDraft: CorrectionPatch | QuoteBoundTopicDraft,
+  correction: DraftCorrection | undefined, run: EditRunContext) {
+  try {
+    const restored = restoreDraft(stage, modelDraft, correction, run.correctionCatalog, run.topic.pages);
+    return { draft: withKeptParagraphs(restored.draft, run.topic.pages), stableClaims: restored.stableClaims };
+  } catch (error) { throw new ConsolidationOutputError(errorMessage(error)); }
 }
 
 function draftTool(run: EditRunContext, stage: string | undefined, correction?: DraftCorrection) {
@@ -270,7 +296,7 @@ function finalRejection(review: TopicReview, stage: string | undefined): boolean
 function acceptedReview(job: FlowJob, summary: string, review: TopicReview,
   contribution: NonNullable<FlowResult["contribution"]>, pages: PlannedPage[]): FlowResult {
   try { verifyReviewCoverage(review, contribution.claims.length, pages); verifyRetirementReview(review, contribution); }
-  catch (error) { return held(job, errorMessage(error), summary); }
+  catch (error) { return failed(job, errorMessage(error), summary); }
   if (!contribution.claims.length) return { status: "empty", publishedPageIds: [], reviewCount: 0,
     sessionMemory: memory(job, summary, pages.map(page => page.pageId)) };
   return { status: "submitted", publishedPageIds: [], reviewCount: 0, contribution,
@@ -295,6 +321,12 @@ function checkedContribution(draft: TopicDraft, job: FlowJob, pages: PlannedPage
 function held(job: FlowJob, reason: string, summary: string): FlowResult {
   return { status: "needs_review", publishedPageIds: [], reviewCount: 1, error: reason,
     sessionMemory: memory(job, `未发布（待审）：${reason}\n${summary}`, []) };
+}
+
+/** Preserve diagnostics and inputs while separating machine failure from a request for user intent. */
+function failed(job: FlowJob, reason: string, summary: string, retryable = false): FlowResult {
+  return { status: "error", publishedPageIds: [], reviewCount: 0, error: reason,
+    ...(retryable === false ? { retryable } : {}), sessionMemory: memory(job, `未发布（技术失败）：${reason}\n${summary}`, []) };
 }
 
 function verifyReviewCoverage(review: TopicReview, count: number, pages: PlannedPage[]): void {

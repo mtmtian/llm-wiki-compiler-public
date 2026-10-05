@@ -20,9 +20,11 @@ it("Given a support selector outside frozen evidence, When the editor returns it
   initial.claims[0].supportingQuotes = [{ ...support, quote: "建议保留全部不存在的审计日志。" }];
   let reviews = 0;
 
-  await expect(runConsolidation(input, { knowledge_topic_plan: plan(), knowledge_topic_edit: initial,
-    knowledge_topic_review: () => { reviews += 1; return accepted(); } }, new Map([[pageId, original]])))
-    .rejects.toThrow(/supportingQuotes\/0\/quoteId must be equal to one of the allowed values/);
+  const result = await runConsolidation(input, { knowledge_topic_plan: plan(), knowledge_topic_edit: initial,
+    knowledge_topic_review: () => { reviews += 1; return accepted(); } }, new Map([[pageId, original]]));
+  expect(result).toMatchObject({ status: "error", retryable: false,
+    error: expect.stringMatching(/supportingQuotes\/0\/quoteId must be equal to one of the allowed values/) });
+  expect(result.contribution).toBeUndefined();
 
   expect(reviews).toBe(0);
 });

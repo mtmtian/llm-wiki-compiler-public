@@ -2,7 +2,9 @@
 import copy
 import json
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from common import digest, load_json, save_json
@@ -67,6 +69,35 @@ class ExchangeTests(unittest.TestCase):
         write_receipt(self.publisher, job, {"status": "published", "publishedPageIds": ["concepts/new"], "reviewCount": 0})
         self.publisher["stateDir"] = str(self.root / "b-reinstalled")
         self.assertEqual(import_pending(self.publisher), 0)
+
+    def test_packet_import_cannot_race_stop_past_the_shared_runnable_cap(self):
+        """A durable shared packet stays available when a concurrent Stop takes the last slot."""
+        export_result(self.config, self.job, self.result)
+        self.publisher["maxQueuedJobs"] = 1
+        entered, release = threading.Event(), threading.Event()
+        from exchange import incoming_job
+
+        def pause_before_admission(packet, config):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test did not release packet preparation")
+            return incoming_job(packet, config)
+
+        job = {"id": "stop", "projectId": "project", "prompt": "Must preserve evidence",
+               "evidence": [{"id": "stop-e", "kind": "user", "text": "Must preserve evidence"}]}
+        queued = Path(self.publisher["stateDir"]) / "queue/stop.json"
+        with patch("exchange.incoming_job", side_effect=pause_before_admission):
+            with ThreadPoolExecutor(max_workers=1) as workers:
+                importing = workers.submit(import_pending, self.publisher)
+                self.assertTrue(entered.wait(2))
+                hooks.enqueue_job(job, queued, self.publisher)
+                release.set()
+                self.assertEqual(importing.result(timeout=5), 0)
+
+        self.assertEqual([path.name for path in (Path(self.publisher["stateDir"]) / "queue").glob("*.json")],
+                         ["stop.json"])
+        self.assertEqual(list((Path(self.publisher["stateDir"]) / "capture-pending").glob("*.json")), [])
+        self.assertTrue(list((self.root / "exchange/submissions/a").glob("*.json")))
 
     def test_tampered_and_incomplete_packets_never_enter_local_queue(self):
         export_result(self.config, self.job, self.result)

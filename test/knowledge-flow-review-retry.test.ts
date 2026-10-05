@@ -31,5 +31,5 @@ it("allows an explicit replacement at capacity without publishing empty evidence
 it("still blocks a new job or a retry referring to no existing hold", async () => {
   const { config, job } = await fixture();
   const result = await processJob({ ...job, reviewRetryOf: "missing" }, config);
-  expect(result).toMatchObject({ status: "needs_review", error: "review queue is full" });
+  expect(result).toMatchObject({ status: "deferred", reviewCount: 0, error: "review queue is full" });
 });

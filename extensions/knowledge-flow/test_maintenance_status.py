@@ -99,6 +99,11 @@ class MaintenanceStatusTests(unittest.TestCase):
         """Given persisted errors, When status runs, Then it reports holds without pruning or writing."""
         marker = self.configure_enabled_replica_probe()
         self.seed_status_scenarios()
+        save_json(self.state / "review/old.json", {"jobId": "old", "projectId": "synthetic"})
+        save_json(self.state / "review/retry.json", {
+            "jobId": "retry", "projectId": "synthetic", "reviewRetryOf": "old"})
+        save_json(self.state / "review/independent.json", {
+            "jobId": "independent", "projectId": "other"})
         old_turn = self.state / "turns/expired.json"
         save_json(old_turn, {"prompt": "synthetic"})
         expired = time.time() - 8 * 86400
@@ -113,6 +118,9 @@ class MaintenanceStatusTests(unittest.TestCase):
         self.assertEqual({item["jobId"] for item in result["audit"]["unresolvedQueueFull"]}, {"open", "continued"})
         self.assertEqual(result["audit"]["errorsByType"][QUEUE_FULL_ERROR], 7)
         self.assertEqual(result["audit"]["errorsByDay"]["2026-10-03"], 6)
+        self.assertEqual(result["counts"]["review"], 4)
+        self.assertEqual(result["activeReviewCount"], 2)
+        self.assertEqual({item["jobId"] for item in result["activeReviews"]}, {"retry", "independent"})
         self.assertIsNone(result["lastSuccessfulSyncAt"])
         self.assertFalse((self.state / "maintenance.json").exists())
         self.assertFalse(marker.exists())

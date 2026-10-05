@@ -182,7 +182,7 @@ class SessionConsolidationTests(unittest.TestCase):
         """Given finalize fails after model output, When retried, Then model and revision occur once."""
         self.put(self.job("interrupt", self.now - timedelta(seconds=301)))
         calls = []
-        with patch("queue_worker.write_receipt", side_effect=[OSError("temporary"), None]):
+        with patch("queue_finalization.write_receipt", side_effect=[OSError("temporary"), None]):
             first = process_queue(self.config, lambda *args: calls.append(args) or {"status": "empty"},
                                   clock=lambda: self.now)
             second = process_queue(self.config, lambda *args: calls.append(args) or {"status": "empty"},

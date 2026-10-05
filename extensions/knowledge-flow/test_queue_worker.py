@@ -130,7 +130,7 @@ class QueueWorkerTests(unittest.TestCase):
                 path.rename(Path(state) / "failed" / path.name)
                 return
             raise KeyboardInterrupt()
-        with patch("queue_worker._retry_job", side_effect=partial_retry):
+        with patch("queue_finalization._retry_job", side_effect=partial_retry):
             with self.assertRaises(KeyboardInterrupt):
                 process_queue(self.config, lambda *args: {"status": "error"}, clock=lambda: self.now)
         audit = next((self.root / "batches").glob("*.json"))
@@ -144,6 +144,64 @@ class QueueWorkerTests(unittest.TestCase):
         self.assertFalse(calls)
         self.assertEqual(load_json(self.root / "failed/b.json")["status"], "batch-failed")
         self.assertFalse((self.root / "queue/b.json").exists())
+
+    def test_final_retry_result_replays_after_partial_terminal_source_move(self):
+        """Persist ledger-bearing failure intent before moving the final source."""
+        self.put("a", attempts=2)
+        self.put("b", attempts=2)
+
+        def interrupt_move(state, path, job, now, config):
+            if path.name == "a.json":
+                path.rename(Path(state) / "failed" / path.name)
+                return
+            raise KeyboardInterrupt()
+
+        result = {"status": "error", "retryable": True, "error": "transient",
+                  "ledgerContribution": {"version": 1, "records": []}}
+        with patch("queue_finalization._retry_job", side_effect=interrupt_move):
+            with self.assertRaises(KeyboardInterrupt):
+                process_queue(self.config, lambda *args: result, clock=lambda: self.now)
+        audit_path = next((self.root / "batches").glob("*.json"))
+        audit = load_json(audit_path)
+        self.assertEqual(audit["status"], "failure-finalize")
+        self.assertEqual(audit["result"], result)
+
+        exported, calls = [], []
+        with patch("queue_finalization.export_result", side_effect=lambda cfg, job, value: exported.append(value) or value):
+            process_queue(self.config,
+                          lambda *args: calls.append(args) or {"status": "empty"},
+                          clock=lambda: self.now + timedelta(seconds=301))
+        self.assertEqual(calls, [])
+        self.assertEqual(exported, [result])
+        self.assertEqual(load_json(audit_path)["status"], "failed")
+        self.assertFalse((self.root / "completed/a.json").exists())
+        self.assertFalse((self.root / "completed/b.json").exists())
+
+    def test_last_valid_ledger_error_survives_later_transport_failures(self):
+        """A later transport error cannot erase the latest durable worker result."""
+        self.put("mixed")
+        accepted = {"status": "error", "retryable": True, "error": "phase1 warning",
+                    "ledgerContribution": {"version": 1, "records": []}}
+        calls, exported = [], []
+
+        def invoke(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                return accepted
+            raise RuntimeError("transport unavailable")
+
+        process_queue(self.config, invoke, clock=lambda: self.now)
+        process_queue(self.config, invoke, clock=lambda: self.now + timedelta(seconds=301))
+        with patch("queue_finalization.export_result",
+                   side_effect=lambda cfg, job, result: exported.append(result) or result):
+            process_queue(self.config, invoke, clock=lambda: self.now + timedelta(seconds=901))
+
+        audit = load_json(next((self.root / "batches").glob("*.json")))
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(audit["status"], "failed")
+        self.assertEqual(audit["result"], accepted)
+        self.assertEqual(exported, [accepted])
+        self.assertFalse((self.root / "completed/mixed.json").exists())
 
     def test_unknown_worker_status_is_retried(self):
         self.put("odd")
@@ -173,7 +231,7 @@ class QueueWorkerTests(unittest.TestCase):
                    "status": "result-ready", "queueFiles": ["durable.json"], "job": merged,
                    "result": {"status": "empty"}})
         calls = []
-        with patch("queue_worker.write_receipt", side_effect=OSError("temporary")):
+        with patch("queue_finalization.write_receipt", side_effect=OSError("temporary")):
             first = process_queue(self.config, lambda *args: calls.append(args), clock=lambda: self.now)
             second = process_queue(self.config, lambda *args: calls.append(args), clock=lambda: self.now)
         audit = load_json(self.root / "batches/batch-durable.json")
@@ -191,7 +249,7 @@ class QueueWorkerTests(unittest.TestCase):
                    "status": "result-ready", "queueFiles": ["durable-export.json"], "job": merged,
                    "result": {"status": "empty"}})
         calls = []
-        with patch("queue_worker.export_result", side_effect=OSError("temporary")):
+        with patch("queue_finalization.export_result", side_effect=OSError("temporary")):
             process_queue(self.config, lambda *args: calls.append(args), clock=lambda: self.now)
             process_queue(self.config, lambda *args: calls.append(args), clock=lambda: self.now)
         self.assertEqual(len(calls), 0)
@@ -205,7 +263,7 @@ class QueueWorkerTests(unittest.TestCase):
         calls = []
         times = [self.now, self.now + timedelta(seconds=301), self.now + timedelta(seconds=902),
                  self.now + timedelta(seconds=2103)]
-        with patch("queue_worker.write_receipt", side_effect=[OSError(), OSError(), OSError(), None]):
+        with patch("queue_finalization.write_receipt", side_effect=[OSError(), OSError(), OSError(), None]):
             for current in times:
                 process_queue(self.config, lambda *args: calls.append(args), clock=lambda current=current: current)
         audit = load_json(self.root / "batches/batch-lost.json")
@@ -216,7 +274,7 @@ class QueueWorkerTests(unittest.TestCase):
     def test_invoke_result_finalization_failure_never_retries_model(self):
         self.put("post-invoke")
         calls = []
-        with patch("queue_worker.write_receipt", side_effect=OSError("temporary")):
+        with patch("queue_finalization.write_receipt", side_effect=OSError("temporary")):
             first = process_queue(self.config, lambda *args: calls.append(args) or {"status": "empty"},
                                   clock=lambda: self.now)
             second = process_queue(self.config, lambda *args: calls.append(args) or {"status": "empty"},

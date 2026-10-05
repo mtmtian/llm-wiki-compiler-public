@@ -97,6 +97,22 @@ class FailedRequeueTests(unittest.TestCase):
         self.assertEqual(requeue_failed(self.config, "turn-d")["status"], "empty")
         self.assertEqual(load_json(self.state / "resolved" / "turn-d.json")["outcome"], "empty")
 
+    def test_review_full_requeue_is_archived_as_a_recoverable_capacity_wait(self):
+        """A review-capacity wait is durable and must not strand the failed source."""
+        self.failed("turn-review-full")
+        self.config["maxPendingPerProject"] = 1
+        save_json(self.state / "review/held.json", {"jobId": "held", "projectId": "growth"})
+
+        result = requeue_failed(self.config, "turn-review-full")
+
+        self.assertEqual(result["status"], "deferred")
+        pending = load_json(self.state / "capture-pending/turn-review-full-requeue.json")
+        self.assertEqual(pending["kind"], "capacity")
+        self.assertEqual(pending["job"]["requeueOf"], "turn-review-full")
+        archive = load_json(self.state / "resolved/turn-review-full.json")
+        self.assertEqual((archive["action"], archive["outcome"]), ("requeued", "deferred"))
+        self.assertFalse((self.state / "failed/turn-review-full.json").exists())
+
     def test_busy_worker_and_invalid_sources_are_refused(self):
         """Given a running worker, an unknown name or a review retry, Then requeue refuses without writing."""
         self.failed("turn-e")

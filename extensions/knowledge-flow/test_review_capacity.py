@@ -1,20 +1,15 @@
-"""A full review queue makes new work wait instead of becoming a silent hold.
-
-Given a project whose pending reviews reached ``maxPendingPerProject``, the
-worker must keep that project's queued turns untouched, spend no budget and
-invoke no model, while still letting the existing guard take over once the
-shared intake queue is crowded, so one backlog cannot block every project.
-"""
+"""A full review queue parks work as capacity waits while other projects run."""
 
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from common import save_json
+from common import load_json, save_json
+from capture_retry import process_capture_retries
 from queue_worker import process_queue
-from review_capacity import should_wait_for_review
+from review_capacity import review_queue_full
 from wake import _reasons
 
 
@@ -34,20 +29,22 @@ class ReviewCapacityTests(unittest.TestCase):
     def hold(self, name, project="growth"):
         save_json(self.state / "review" / (name + ".json"), {"jobId": name, "projectId": project})
 
-    def enqueue(self, name):
-        job = {"id": name, "projectId": "growth", "sessionId": "session", "prompt": name,
+    def enqueue(self, name, project="growth"):
+        job = {"id": name, "projectId": project, "sessionId": "session", "prompt": name,
                "evidence": [{"id": name, "kind": "user", "text": name}]}
         save_json(self.state / "queue" / (name + ".json"), job)
         return self.state / "queue" / (name + ".json")
 
-    def drain(self):
+    def drain(self, now=None):
         def invoke(*args):
             self.calls.append(args)
             return {"status": "empty", "publishedPageIds": []}
-        return process_queue(self.config, invoke, clock=lambda: self.now)
+        now = now or self.now
+        process_capture_retries(self.config, now)
+        return process_queue(self.config, invoke, clock=lambda: now)
 
-    def test_full_review_queue_defers_without_budget_or_invoke(self):
-        """Given a full review queue, When the worker wakes, Then the turn waits untouched."""
+    def test_full_review_queue_parks_complete_input_without_budget_or_invoke(self):
+        """A full project moves its unclaimed source to durable capacity wait."""
         self.hold("old-1")
         self.hold("old-2")
         queued = self.enqueue("turn")
@@ -56,7 +53,10 @@ class ReviewCapacityTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(result["reason"], "review-queue-full")
         self.assertFalse((self.state / "daily-budget.json").exists())
-        self.assertEqual(queued.read_bytes(), before)
+        self.assertFalse(queued.exists())
+        self.assertTrue((self.state / "capture-pending/turn.json").is_file())
+        self.assertEqual(json.loads(before)["evidence"],
+                         load_json(self.state / "capture-pending/turn.json")["job"]["evidence"])
         self.assertEqual(list((self.state / "batches").glob("*.json")), [])
         self.assertIn("review-queue-full", _reasons({}, {}, result))
 
@@ -69,14 +69,15 @@ class ReviewCapacityTests(unittest.TestCase):
         self.enqueue("turn-2")
         self.drain()
         (self.state / "review/old-2.json").unlink()
-        result = self.drain()
+        process_capture_retries(self.config, self.now + timedelta(seconds=301))
+        result = self.drain(self.now + timedelta(seconds=602))
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(sorted(self.calls[0][2]["job"]["sourceJobIds"]), ["turn", "turn-2"])
         self.assertEqual(result["processed"], 2)
         self.assertEqual(list((self.state / "queue").glob("*.json")), [])
 
-    def test_already_claimed_batch_is_not_held_back(self):
-        """A batch claimed before the queue filled continues so its durable result can finalize."""
+    def test_claimed_batch_stays_in_queue_when_capacity_becomes_full(self):
+        """A claimed source remains recoverable when review capacity closes before invocation."""
         self.hold("old-1")
         self.hold("old-2")
         job = self.enqueue("turn").read_text()
@@ -85,7 +86,10 @@ class ReviewCapacityTests(unittest.TestCase):
         save_json(self.state / "batches/batch-claimed.json", {"version": 1, "batchId": "batch-claimed",
                   "status": "claimed", "queueFiles": ["turn.json"], "job": merged})
         self.drain()
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls, [])
+        self.assertTrue((self.state / "queue/turn.json").exists())
+        self.assertEqual(load_json(self.state / "batches/batch-claimed.json")["status"],
+                         "capacity-deferred")
 
     def test_other_projects_reviews_do_not_block(self):
         """Holds of another project never count against this project's capacity."""
@@ -95,30 +99,33 @@ class ReviewCapacityTests(unittest.TestCase):
         self.drain()
         self.assertEqual(len(self.calls), 1)
 
-    def test_crowded_intake_queue_falls_back_to_the_existing_guard(self):
-        """Given half the shared queue is used, waiting stops so other projects keep room."""
+    def test_full_project_parking_keeps_unrelated_project_runnable(self):
+        """Parked work from one full project leaves a runnable slot for another project."""
         self.config["maxQueuedJobs"] = 4
+        self.config["projects"]["other"] = {"pages": []}
         self.hold("old-1")
         self.hold("old-2")
         self.enqueue("turn-a")
         self.enqueue("turn-b")
+        self.enqueue("turn-c", project="other")
         self.drain()
         self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][2]["job"]["projectId"], "other")
 
     def test_retry_does_not_count_the_hold_it_replaces(self):
         """A reprocessing attempt frees the slot of the review it would replace."""
         self.hold("old-1")
         self.hold("old-2")
         job = {"projectId": "growth", "reviewRetryOf": "old-2"}
-        self.assertFalse(should_wait_for_review(self.config, job))
-        self.assertTrue(should_wait_for_review(self.config, {"projectId": "growth"}))
+        self.assertFalse(review_queue_full(self.config, job))
+        self.assertTrue(review_queue_full(self.config, {"projectId": "growth"}))
 
     def test_missing_or_invalid_limit_leaves_validation_to_the_worker(self):
         """Without a valid configured limit the pre-check stays out of the way."""
         self.hold("old-1")
         for limit in (None, 0, "2"):
             self.config["maxPendingPerProject"] = limit
-            self.assertFalse(should_wait_for_review(self.config, {"projectId": "growth"}))
+            self.assertFalse(review_queue_full(self.config, {"projectId": "growth"}))
 
 
 if __name__ == "__main__":

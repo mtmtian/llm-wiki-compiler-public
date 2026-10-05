@@ -2,7 +2,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { build } from "tsup";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -24,6 +25,16 @@ afterAll(async () => { await rm(runtime, { recursive: true, force: true }); });
 function input() {
   return { config: { wikiRoot: wiki.value, stateDir: wiki.value, maxContextChars: 6000 },
     projectId: GAME_PROJECT, prompt: LANGUAGE_QUESTION, allowedPageIds: [GAME_PAGE], seen: {} };
+}
+
+/** Source and state stay isolated; empty evidence and corrupt cache cases must never call a model. */
+function processingInput(stateName: string) {
+  return { config: { wikiRoot: wiki.value, stateDir: path.join(wiki.value, stateName),
+    model: "test", maxProposals: 5, maxPendingPerProject: 1 },
+  job: { id: "process-boundary", projectId: "example", projectLabel: "Example", sessionId: "session", turnId: "turn",
+    cwd: wiki.value, createdAt: "2025-01-01T00:00:00Z", prompt: "Synthetic processing boundary", lastAssistant: "",
+    evidence: [] as Array<{ id: string; kind: "user"; text: string; sha256: string; observedAt: string; locator: string }>,
+    allowedPageIds: [] as string[] } };
 }
 
 /** The real hook's four-second deadline bounds both output and process completion. */
@@ -92,5 +103,42 @@ process.stdout.write = (...args) => {
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ resolved: false });
     expect(await readFile(marker, "utf8")).toBe("settled");
+  });
+});
+
+describe("queue result process contract", () => {
+  it("Given full review capacity, Then serializes a recoverable defer and resumes the same ID after release", async () => {
+    const request = processingInput("capacity-state");
+    const review = path.join(request.config.stateDir, "review", "held.json");
+    await mkdir(path.dirname(review), { recursive: true });
+    await writeFile(review, JSON.stringify({ jobId: "held", projectId: "example" }));
+    const deferred = await run("process", request);
+    expect(deferred.code, deferred.stderr).toBe(0);
+    expect(JSON.parse(deferred.stdout)).toMatchObject({ status: "deferred", reviewCount: 0 });
+    await expect(readdir(path.join(request.config.stateDir, "audit"))).rejects.toThrow();
+    await rm(review);
+    const resumed = await run("process", request);
+    expect(resumed.code, resumed.stderr).toBe(0);
+    expect(JSON.parse(resumed.stdout)).toMatchObject({ status: "empty", reviewCount: 0 });
+  });
+
+  it("Given corrupt frozen model JSON, Then transports and replays a permanent error without a human hold", async () => {
+    const request = processingInput("invalid-state");
+    const text = "The user confirms a synthetic rule.";
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+    request.job.evidence.push({ id: "source", kind: "user", text, sha256: hash(text),
+      observedAt: request.job.createdAt, locator: "synthetic://source" });
+    const directory = path.join(request.config.stateDir, "consolidation", hash(request.job.id));
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "knowledge_topic_plan.json"), "{");
+    const payload = { config: { ...request.config, exchange: { protocolVersion: 2 } },
+      job: { ...request.job, sessionContext: { version: 1, revision: 1, summary: "", topicPageIds: [], evidence: [] } } };
+    const first = await run("process", payload);
+    expect(first.code, first.stderr).toBe(0);
+    expect(JSON.parse(first.stdout)).toMatchObject({ status: "error", retryable: false, reviewCount: 0 });
+    const repeated = await run("process", payload);
+    expect(repeated.code, repeated.stderr).toBe(0);
+    expect(JSON.parse(repeated.stdout)).toEqual(JSON.parse(first.stdout));
+    await expect(readdir(path.join(request.config.stateDir, "review"))).rejects.toThrow();
   });
 });

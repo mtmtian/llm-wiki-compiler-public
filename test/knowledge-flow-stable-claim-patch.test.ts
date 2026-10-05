@@ -6,7 +6,7 @@ import { resolveQuoteBoundDraft } from "../extensions/knowledge-flow/consolidati
 import type { QuoteBoundTopicDraft, StableClaimEntry } from "../extensions/knowledge-flow/consolidation-draft.js";
 import { buildCorrectionEvidence } from "../extensions/knowledge-flow/consolidation-quotes.js";
 import { consolidateSession } from "../extensions/knowledge-flow/consolidate.js";
-import { accepted, config, draft, expectNeedsReview, job, original, pageId, plan } from "./knowledge-flow-consolidation-fixtures.js";
+import { accepted, config, draft, job, original, pageId, plan } from "./knowledge-flow-consolidation-fixtures.js";
 import { sha256Text } from "../src/connectors/hash.js";
 
 const report = "助手报告：样例导入按文件名排序，重复文件会保留最新版本。";
@@ -132,7 +132,7 @@ describe("stable claim correction patches", () => {
     { name: "unknown claim update", patch: { claimUpdates: [{ claimId: "c9", changes: [{ field: "text", value: "a" }] }] } },
     { name: "accepted claim edit", accepted: true, patch: { claimUpdates: [{ claimId: "c0", changes: [{ field: "text", value: "a" }] }] } },
     { name: "accepted claim drop", accepted: true, patch: { claimUpdates: [], droppedClaimIds: ["c0"] } },
-  ])("Given a $name, When a correction is resolved, Then the run is held", async ({ patch, accepted: priorAccepted }) => {
+  ])("Given a $name, When a correction is resolved, Then the invalid output is a permanent technical failure", async ({ patch, accepted: priorAccepted }) => {
     const initial = draft();
     let reviews = 0;
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (value: any) => value.correction
@@ -142,7 +142,8 @@ describe("stable claim correction patches", () => {
         : review("accept", 1, { claimDecisions: [{ claimIndex: 0, decision: "accept", reason: "通过" }] }) });
 
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
-    expectNeedsReview(result);
+    expect(result).toMatchObject({ status: "error", retryable: false });
+    expect(result.contribution).toBeUndefined();
     expect(result.error).toContain("correction evidence selection failed");
     expect(reviews).toBe(1);
   });
@@ -198,7 +199,7 @@ describe("stable claim correction patches", () => {
       supportingQuotes: [{ evidenceId: narrowedProposal?.id, quote: assistant.text }] });
   });
 
-  it("Given no source-change permission, When a patch drops assistant support, Then the correction is held", async () => {
+  it("Given no source-change permission, When a patch drops assistant support, Then the correction is a permanent technical failure", async () => {
     const input = job();
     const assistant = evidence("proposal-to-drop", "assistant", proposal);
     input.evidence.push(assistant);
@@ -210,7 +211,8 @@ describe("stable claim correction patches", () => {
       : initial, knowledge_topic_review: rejectThenAccept("修正文案") });
 
     const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
-    expectNeedsReview(result);
+    expect(result).toMatchObject({ status: "error", retryable: false });
+    expect(result.contribution).toBeUndefined();
   });
 
   it("Given replacement permission for an assistant lesson, When the patch selects user evidence, Then authority promotion is rejected", async () => {
@@ -226,7 +228,8 @@ describe("stable claim correction patches", () => {
       : initial, knowledge_topic_review: rejectThenAccept("需要修正主引文", [0]) });
 
     const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
-    expectNeedsReview(result);
+    expect(result).toMatchObject({ status: "error", retryable: false });
+    expect(result.contribution).toBeUndefined();
     expect(result.error).toContain("must be equal to one of the allowed values");
   });
 

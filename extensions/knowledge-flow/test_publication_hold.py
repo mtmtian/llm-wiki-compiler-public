@@ -1,10 +1,10 @@
-"""A durable result that breaks the publication contract becomes a review hold.
+"""A durable result that breaks the publication contract becomes a terminal failure.
 
 Given a frozen batch whose saved model result predates the current evidence-role
 contract, finalization can never publish it: the result is reused verbatim on
-every attempt. The worker must not back off forever. The batch completes as an
-ordinary hold that keeps the rejected result in its audit and can be drafted
-again with ``--retry-review``. Other finalization failures keep their backoff.
+every attempt. The worker must not back off forever or turn the technical
+failure into human review. The audit keeps the rejected result and the source
+moves to failed. Other finalization failures keep their backoff.
 """
 
 import tempfile
@@ -14,10 +14,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from common import digest, load_json, save_json
-from publication_hold import CONTRACT_HOLD_ERROR
 from queue_worker import process_queue
 from replica import initialize_baseline
-from review_retry import retry_review
 
 
 def _evidence(identifier, kind, text):
@@ -75,40 +73,40 @@ class PublicationHoldTests(unittest.TestCase):
             raise AssertionError("a frozen result must not call the model")
         return process_queue(self.config, no_model, clock=lambda: self.now)
 
-    def test_contract_violation_completes_as_hold_and_keeps_rejected_result(self):
-        """When the frozen result can never publish, Then it is held instead of retried."""
+    def test_contract_violation_is_terminal_and_keeps_rejected_result(self):
+        """When the frozen result can never publish, Then it fails without creating review."""
         self.drain()
         audit = load_json(self.state / "batches/batch-old.json")
-        self.assertEqual(audit["status"], "completed")
-        self.assertEqual(audit["result"]["status"], "needs_review")
-        self.assertTrue(audit["result"]["error"].startswith(CONTRACT_HOLD_ERROR))
-        self.assertNotIn("contribution", audit["result"])
+        self.assertEqual(audit["status"], "failed")
+        self.assertEqual((audit["result"]["status"], audit["result"]["retryable"]), ("error", False))
+        self.assertIn("publication contract failure", audit["result"]["error"])
         self.assertEqual(audit["unpublishedResult"], self.result)
-        review = load_json(self.state / "review/batch-old.json")
-        self.assertEqual((review["jobId"], review["projectId"]), ("batch-old", "project"))
-        self.assertIn("assistant evidence", review["decisions"][0]["reason"])
         self.assertFalse((self.state / "queue/turn-old.json").exists())
+        self.assertTrue((self.state / "failed/turn-old.json").exists())
+        self.assertFalse((self.state / "review/batch-old.json").exists())
         self.assertFalse(list(self.exchange.glob("v2/publications/a/*.json")))
 
-    def test_held_contract_violation_can_be_drafted_again(self):
-        """Given the hold, When an operator asks to reprocess it, Then the existing retry accepts it."""
+    def test_permanent_contract_failure_cannot_be_retried_as_a_review(self):
+        """A technical failure does not create a manual review retry path."""
         self.drain()
-        staged = retry_review(self.config, "batch-old", dry_run=True, clock=lambda: self.now)
-        self.assertEqual(staged["status"], "ready")
-        self.assertEqual(staged["reviewJobId"], "batch-old")
+        from review_retry import retry_review
+        with self.assertRaisesRegex(ValueError, "completed held session"):
+            retry_review(self.config, "batch-old", dry_run=True, clock=lambda: self.now)
 
-    def test_violation_found_only_by_packet_validation_is_held_too(self):
-        """Given evidence that no claim references, which only packet validation rejects, Then it is held."""
+    def test_violation_found_only_by_packet_validation_is_terminal_too(self):
+        """Packet validation failures use the same technical-failure lifecycle."""
         user, unused = _evidence("u", "user", "keep the launcher"), _evidence("x", "user", "unused remark")
         self.freeze({"claims": [_claim(user, "decision", "decided")], "evidence": [user, unused]})
         self.drain()
         audit = load_json(self.state / "batches/batch-old.json")
-        self.assertEqual((audit["status"], audit["result"]["status"]), ("completed", "needs_review"))
+        self.assertEqual((audit["status"], audit["result"]["status"]), ("failed", "error"))
+        self.assertIn("publication contract failure", audit["result"]["error"])
         self.assertIn("not referenced by a claim", audit["result"]["error"])
+        self.assertFalse((self.state / "review/batch-old.json").exists())
 
     def test_other_finalization_errors_keep_their_backoff(self):
         """Given an export failure that is not a contract violation, Then the batch backs off as before."""
-        with patch("queue_worker.export_result", side_effect=ValueError("Conflicting exchange write")):
+        with patch("queue_finalization.export_result", side_effect=ValueError("Conflicting exchange write")):
             self.drain()
         audit = load_json(self.state / "batches/batch-old.json")
         self.assertEqual((audit["status"], audit["finalizeAttempts"]), ("finalize-retry", 23))

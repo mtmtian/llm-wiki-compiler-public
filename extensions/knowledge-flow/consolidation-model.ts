@@ -8,6 +8,9 @@ import type { LLMProvider, LLMTool } from "../../src/utils/provider.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 
+/** Invalid model or frozen data needs a new corrected attempt, never human intent review. */
+export class ConsolidationOutputError extends Error {}
+
 /** A cache entry is bound to the schema, prompt, model and system policy, never just the stage name. */
 export async function durableModel<T>(request: { stateDir: string; jobId: string; model: string; provider: LLMProvider;
   tool: LLMTool; system: string; prompt: string; tokens: number; stage?: string }): Promise<T> {
@@ -20,11 +23,11 @@ export async function durableModel<T>(request: { stateDir: string; jobId: string
     throw error;
   });
   if (prior !== null) {
-    const cached = JSON.parse(prior) as { identity: string; output: unknown };
-    if (cached.identity !== identity) throw new Error("frozen consolidation inputs changed; needs review");
+    const cached = parsed(prior) as { identity?: string; output?: unknown } | null;
+    if (cached?.identity !== identity) throw new ConsolidationOutputError("frozen consolidation inputs changed; new attempt required");
     return validated<T>(tool, cached.output);
   }
-  const output = validated<T>(tool, JSON.parse(await provider.toolCall(system, [{ role: "user", content: prompt }], [tool], tokens)));
+  const output = validated<T>(tool, parsed(await provider.toolCall(system, [{ role: "user", content: prompt }], [tool], tokens)));
   await mkdir(folder, { recursive: true, mode: 0o700 });
   await atomicWrite(file, JSON.stringify({ identity, output }), { confineRoot: request.stateDir });
   return output;
@@ -32,6 +35,12 @@ export async function durableModel<T>(request: { stateDir: string; jobId: string
 
 function validated<T>(tool: LLMTool, output: unknown): T {
   const validate = ajv.compile<T>(tool.input_schema);
-  if (!validate(output)) throw new Error(`${tool.name}: ${ajv.errorsText(validate.errors)}`);
+  if (!validate(output)) throw new ConsolidationOutputError(`${tool.name}: ${ajv.errorsText(validate.errors)}`);
   return output;
+}
+
+/** Keep transport errors outside this boundary; only returned data is classified as invalid output. */
+function parsed(text: string): unknown {
+  try { return JSON.parse(text); }
+  catch (error) { throw new ConsolidationOutputError(error instanceof Error ? error.message : "invalid model JSON"); }
 }

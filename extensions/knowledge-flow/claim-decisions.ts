@@ -29,16 +29,17 @@ function disputedClaims(review: ClaimReview | undefined): Set<number> {
 type Contribution = NonNullable<FlowResult["contribution"]>;
 
 /**
- * Finish a batch result: record its review attempts and, when the ledger is enabled, let a held
- * batch carry the claims its final review accepted. Submitted and empty results are unchanged.
+ * Finish a batch result: preserve accepted ledger claims when a page remains held or fails.
+ * An invalid accepted-page review cannot bypass its failed coverage check through the ledger.
  */
 export function finishResult(result: FlowResult, reviews: readonly ClaimReview[],
   ledger: { enabled: boolean; reviewed?: Contribution }): FlowResult {
   const recorded = reviews.length ? { ...result, claimReviews: [...reviews] } : result;
-  const ledgerContribution = ledger.enabled && result.status === "needs_review" && ledger.reviewed
+  const unfinished = result.status === "needs_review" || (result.status === "error" && reviews.at(-1)?.decision !== "accept");
+  const ledgerContribution = ledger.enabled && unfinished && ledger.reviewed
     ? acceptedClaims(ledger.reviewed, reviews.at(-1)) : undefined;
   if (!ledgerContribution) return recorded;
-  const note = `其中 ${ledgerContribution.claims.length} 条已接受的 claim 提交为账本记录`;
+  const note = `其中 ${ledgerContribution.claims.length} 条已接受的 claim 保留用于账本发布`;
   return { ...recorded, ledgerContribution, error: recorded.error ? `${recorded.error}；${note}` : note };
 }
 
