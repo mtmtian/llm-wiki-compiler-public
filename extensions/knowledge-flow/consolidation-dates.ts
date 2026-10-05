@@ -34,22 +34,24 @@ function assertPageDates(edit: TopicDraft["pages"][number], page: PlannedPage, c
   for (const paragraph of pageParagraphs(edit.body)) {
     const headings = paragraph.split("\n").filter(line => HEADING.test(line));
     if (headings.length) sectionHeading = headings.join("\n");
-    if (isUnchanged(paragraph, priorParagraphs)) continue;
+    const hasChangedProse = !isUnchanged(paragraph, priorParagraphs);
     for (const claimIndex of claimIndexes(paragraph, edit.claimIndexes)) {
       const claim = claims[claimIndex];
-      if (claim) assertClaimDate(paragraph, sectionHeading, claimIndex, claim, evidence, publishedDates);
+      if (!claim) continue;
+      const contexts = hasChangedProse ? [paragraph, sectionHeading, claim.text,
+        `${sectionHeading}\n${paragraph}`, `${sectionHeading}\n${claim.text}`] : [claim.text];
+      assertClaimDate(contexts, claimIndex, claim, evidence, publishedDates);
     }
   }
 }
 
 /** A date stated by this claim's quotes is left to semantic review; metadata alone cannot supply it. */
-function assertClaimDate(paragraph: string, heading: string, claimIndex: number, claim: FlowClaim,
+function assertClaimDate(contexts: readonly string[], claimIndex: number, claim: FlowClaim,
   evidenceById: ReadonlyMap<string, FlowEvidence>, publishedDates: ReadonlySet<string>): void {
   const sources = [claim.quote, ...(claim.supportingQuotes ?? []).map(item => item.quote)];
   const quotedDates = new Set(sources.flatMap(dateKeys));
   const metadataDates = new Set([...publishedDates, ...linkedEvidence(claim, evidenceById)
     .flatMap(item => dateKeys(item.observedAt))]);
-  const contexts = [paragraph, heading, claim.text, `${heading}\n${paragraph}`, `${heading}\n${claim.text}`];
   for (const context of contexts) {
     for (const occurrence of dateOccurrences(context)) {
       if (!metadataDates.has(occurrence.value) || quotedDates.has(occurrence.value)) continue;

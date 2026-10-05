@@ -90,6 +90,26 @@ it("Given raw model prose alone exceeds the schema limit, Then it uses the same 
   expect(plans).toBe(2);
 });
 
+it("Given a raw overflow followed by a transport interruption, When retrying the batch, Then it reuses the original overflow and capacity plan", async () => {
+  let plans = 0; let initialEdits = 0; let recoveryEdits = 0;
+  const runtime = config({ knowledge_topic_plan: () => ++plans === 1 ? plan() : separatePlan(),
+    knowledge_topic_edit: (request: any) => {
+      const next = edit(request);
+      if (request.pages[0].pageId === pageId) next.pages[0].body = "x".repeat(MAX_TOPIC_BODY_CHARS + ++initialEdits);
+      else if (++recoveryEdits === 1) throw new Error("temporary model transport interruption");
+      return next;
+    }, knowledge_topic_review: reviewSelected });
+
+  const interrupted = await consolidateCapacity(runtime);
+  expect(interrupted.status).toBe("error");
+  expect(interrupted.retryable).not.toBe(false);
+  expect(interrupted.error).toContain("temporary model transport interruption");
+  const result = await consolidateCapacity(runtime);
+  expect(result.status).toBe("submitted");
+  expect(await consolidateCapacity(runtime)).toEqual(result);
+  expect({ plans, initialEdits, recoveryEdits }).toEqual({ plans: 2, initialEdits: 1, recoveryEdits: 2 });
+});
+
 it("Given a replanned draft needs a reviewer correction, Then its review history preserves the correction stage", async () => {
   let plans = 0; let reviews = 0;
   const runtime = config({ knowledge_topic_plan: () => ++plans === 1 ? plan() : separatePlan(),

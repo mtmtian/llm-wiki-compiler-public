@@ -36,6 +36,12 @@ it("Given an unchanged old paragraph, When checking a draft, Then it skips that 
     [page(`---\nupdatedAt: 2024-12-01T00:00:00Z\n---\n\n${old}`)], [evidence("e1")])).not.toThrow();
 });
 
+it("Given old prose with a new claim marker, When the new claim uses capture metadata as its report date, Then it rejects the claim", () => {
+  const body = "保留这个结论。";
+  const next = draft(`${body}{{claim:0}}`, [claim("e1", "助手报告于 2025-01-15 保留这个结论。")]);
+  expect(() => assertEvidenceDates(next, [page(body)], [evidence("e1")])).toThrow(/claim 0.*2025-01-15/i);
+});
+
 it("Given a new claim under a dated report heading, When the heading inherits capture metadata, Then it rejects", () => {
   const body = "## 报告于 2025-01-15\n\n本轮结论仍然有效。{{claim:0}}";
   expect(() => assertEvidenceDates(draft(body, [claim("e1", "本轮结论")]), [page()], [evidence("e1")]))
