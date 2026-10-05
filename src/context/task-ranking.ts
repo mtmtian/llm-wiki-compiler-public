@@ -17,6 +17,8 @@ const SEMANTIC_SUPPORT_MINIMUM = 0.5;
  * Without embeddings, broad lexical coverage is the fallback evidence.
  */
 const MIN_CROSS_PROJECT_TERMS = 2;
+/** Cross-project topical lookup needs more than one surviving word; project-scoped lookups keep short topic queries. */
+const MIN_QUERY_TERMS = 2;
 const CROSS_PROJECT_SEMANTIC_MINIMUM = 0.6;
 const MIN_CROSS_PROJECT_COVERAGE = 0.5;
 const RRF_OFFSET = 60;
@@ -30,7 +32,7 @@ interface Candidate { section: DecisionSection; lexical: number; semantic: numbe
 export function rankTaskSections(sections: DecisionSection[], prompt: string, hits: SemanticChunkHit[],
   currentProjectId?: string): DecisionSection[] {
   const terms = queryTerms(prompt);
-  if (!terms.length) return [];
+  if (!terms.length || (currentProjectId && terms.length < MIN_QUERY_TERMS)) return [];
   const intent = taskTemporalIntent(prompt);
   const pool = sections.filter(section => intent !== "current" || section.temporalStatus !== "historical");
   const weights = termWeights(pool, terms);
@@ -103,12 +105,16 @@ function lexicalMatch(candidate: Candidate, terms: number): boolean {
   return candidate.coverage >= MIN_QUERY_COVERAGE && (candidate.headingMatch || candidate.matches >= Math.min(2, terms));
 }
 
-/** A strong semantic hit always qualifies; another project's page also needs semantic agreement when available. */
+/**
+ * A strong semantic hit qualifies the current project's pages on its own. Another project's page never skips
+ * the cross-project gate, because a high embedding score alone is how loosely related pages leaked in.
+ */
 function admitted(candidate: Candidate, terms: number, currentProjectId: string | undefined,
   semanticAvailable: boolean): boolean {
-  if (candidate.semantic >= SEMANTIC_ONLY_MINIMUM) return true;
+  const isLocal = !currentProjectId || belongsTo(candidate.section, currentProjectId);
+  if (isLocal && candidate.semantic >= SEMANTIC_ONLY_MINIMUM) return true;
   if (!lexicalMatch(candidate, terms)) return false;
-  if (!currentProjectId || belongsTo(candidate.section, currentProjectId)) return true;
+  if (isLocal) return true;
   if (candidate.matches < MIN_CROSS_PROJECT_TERMS) return false;
   return semanticAvailable ? candidate.semantic >= CROSS_PROJECT_SEMANTIC_MINIMUM
     : candidate.coverage >= MIN_CROSS_PROJECT_COVERAGE;
