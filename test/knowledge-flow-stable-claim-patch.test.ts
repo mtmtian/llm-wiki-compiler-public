@@ -1,7 +1,7 @@
 /** Given/When/Then checks for quoteId-bound stable-claim corrections. */
 import { describe, expect, it } from "vitest";
 import type { FlowEvidence } from "../extensions/knowledge-flow/types.js";
-import { correctionPermissionsForReview } from "../extensions/knowledge-flow/claim-patch.js";
+import { applyCorrectionPatch, correctionPermissionsForReview } from "../extensions/knowledge-flow/claim-patch.js";
 import { resolveQuoteBoundDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
 import type { QuoteBoundTopicDraft, StableClaimEntry } from "../extensions/knowledge-flow/consolidation-draft.js";
 import { buildCorrectionEvidence } from "../extensions/knowledge-flow/consolidation-quotes.js";
@@ -24,11 +24,11 @@ function review(decision: "accept" | "reject", count: number, options: Record<st
 
 function page(body: string, claimIds: string[]) { return { pageId, body, claimIds }; }
 
-function rejectThenAccept(rejectionReason: string) {
+function rejectThenAccept(rejectionReason: string, replacementIndexes: number[] = []) {
   let reviews = 0;
   return () => {
     const rejected = reviews++ === 0;
-    return review(rejected ? "reject" : "accept", 1, { claimDecisions: [{ claimIndex: 0,
+    return review(rejected ? "reject" : "accept", 1, { replaceEvidenceForClaims: rejected ? replacementIndexes : [], claimDecisions: [{ claimIndex: 0,
       decision: rejected ? "reject" : "accept", reason: rejected ? rejectionReason : "通过" }] });
   };
 }
@@ -131,7 +131,7 @@ describe("stable claim correction patches", () => {
       { claimId: "c0", changes: [{ field: "text", value: "b" }] }] } },
     { name: "unknown claim update", patch: { claimUpdates: [{ claimId: "c9", changes: [{ field: "text", value: "a" }] }] } },
     { name: "accepted claim edit", accepted: true, patch: { claimUpdates: [{ claimId: "c0", changes: [{ field: "text", value: "a" }] }] } },
-    { name: "accepted claim drop", accepted: true, patch: { droppedClaimIds: ["c0"] } },
+    { name: "accepted claim drop", accepted: true, patch: { claimUpdates: [], droppedClaimIds: ["c0"] } },
   ])("Given a $name, When a correction is resolved, Then the run is held", async ({ patch, accepted: priorAccepted }) => {
     const initial = draft();
     let reviews = 0;
@@ -143,6 +143,8 @@ describe("stable claim correction patches", () => {
 
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
     expectNeedsReview(result);
+    expect(result.error).toContain("correction evidence selection failed");
+    expect(reviews).toBe(1);
   });
 
   it("Given an explicit replacement permission, When a user fact moves to lower-authority artifact evidence, Then the exact artifact quote is restored", async () => {
@@ -221,10 +223,24 @@ describe("stable claim correction patches", () => {
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (value: any) => value.correction
       ? { claimUpdates: [{ claimId: "c0", changes: [{ field: "quoteId", value: quoteId(value, "user-2") }] }], droppedClaimIds: [],
         pages: [page("## 预算\n助手报告说明重复文件规则。{{claim:c0}}\n\n此前内容。^[old.md:1]", ["c0"])], summary: "切换引文。" }
-      : initial, knowledge_topic_review: rejectThenAccept("需要修正主引文") });
+      : initial, knowledge_topic_review: rejectThenAccept("需要修正主引文", [0]) });
 
     const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
     expectNeedsReview(result);
+    expect(result.error).toContain("must be equal to one of the allowed values");
+  });
+
+  it("Given source-change permission, When runtime receives a user quote for an assistant claim, Then it rejects authority promotion", () => {
+    const assistant = evidence("report", "assistant", report);
+    const user = evidence("approval", "user", "用户批准执行。");
+    const catalog = buildCorrectionEvidence([assistant, user]);
+    const entry: StableClaimEntry = { claimId: "c0", quoteId: catalog[0].quoteOptions[0].quoteId, supportingQuoteIds: [],
+      claim: { ...draft().claims[0], evidenceId: assistant.id, quote: report, kind: "lesson", status: "historical" } };
+    const patch = { claimUpdates: [{ claimId: "c0", changes: [{ field: "quoteId" as const, value: catalog[1].quoteOptions[0].quoteId }] }],
+      droppedClaimIds: [], pages: [page("报告内容。{{claim:c0}}", ["c0"])], summary: "更换来源。" };
+    const permissions = { lockedClaimIds: [], replaceEvidenceForClaimIds: ["c0"] };
+
+    expect(() => applyCorrectionPatch(patch, [entry], permissions, catalog, [])).toThrow(/cannot promote source authority/);
   });
 });
 

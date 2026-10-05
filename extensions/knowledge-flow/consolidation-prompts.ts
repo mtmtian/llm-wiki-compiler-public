@@ -116,8 +116,10 @@ export const correctionEditSystem = editSystem + "\n\nCorrection diagnostics con
   "never repeat a field, and omit the entire claimUpdate to preserve that claim exactly. " +
   "droppedClaimIds may contain only claims the previous review did not accept. Never add a claim. Any claim accepted by the previous review is immutable: " +
   "do not update or drop it. Page claimIds and body markers use the stable IDs shown in correction.previousDraft, such as claimIds:[\"c0\"] and {{claim:c0}}; " +
-  "do not use numeric markers in a correction. Return a complete revised page and summary for every planned destination. The program restores quote text " +
-  "and canonical topic/decisionObject from the selected quoteId and frozen page. Never write quote text, evidence IDs, topic or decisionObject in a patch. " +
+  "do not use numeric markers in a correction. Return a complete revised page and summary for every planned destination. " +
+  "The program restores only evidence fields and destination metadata; it never inserts claim.text into pages[].body. Write the complete supported assertion " +
+  "in pages[].body even for an unchanged or locked claim. For example, body: 'Preserve the raw input.{{claim:c0}}' contains knowledge; " +
+  "body: '{{claim:c0}}' contains only a citation. Omit quote, evidenceId, topic and decisionObject fields from claimUpdates. " +
   "The correction context may list unaccountedCitations by pageId: preserve each exact marker in that page, or declare its exact citationRetirement with a real replacement so independent review can check it. " +
   "Keeping an original paragraph by its keep placeholder restores every marker it had. " +
   "An entry may also list invented markers (remove them, or restore the exact original marker they replaced) and outsideBasis retirements (remove those retirements: the page never had the marker). Do not silently add or remove citations. " +
