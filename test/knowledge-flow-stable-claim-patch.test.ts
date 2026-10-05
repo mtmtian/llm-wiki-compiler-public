@@ -1,6 +1,6 @@
 /** Given/When/Then checks for quoteId-bound stable-claim corrections. */
 import { describe, expect, it } from "vitest";
-import type { FlowEvidence } from "../extensions/knowledge-flow/types.js";
+import type { FlowEvidence, FlowResult } from "../extensions/knowledge-flow/types.js";
 import { applyCorrectionPatch, correctionPermissionsForReview } from "../extensions/knowledge-flow/claim-patch.js";
 import { resolveQuoteBoundDraft } from "../extensions/knowledge-flow/consolidation-draft.js";
 import type { QuoteBoundTopicDraft, StableClaimEntry } from "../extensions/knowledge-flow/consolidation-draft.js";
@@ -23,6 +23,12 @@ function review(decision: "accept" | "reject", count: number, options: Record<st
 }
 
 function page(body: string, claimIds: string[]) { return { pageId, body, claimIds }; }
+
+/** Invalid corrections must neither retry the cached result nor publish a contribution. */
+function expectTechnicalFailure(result: FlowResult): void {
+  expect(result).toMatchObject({ status: "error", retryable: false });
+  expect(result.contribution).toBeUndefined();
+}
 
 function rejectThenAccept(rejectionReason: string, replacementIndexes: number[] = []) {
   let reviews = 0;
@@ -142,8 +148,7 @@ describe("stable claim correction patches", () => {
         : review("accept", 1, { claimDecisions: [{ claimIndex: 0, decision: "accept", reason: "通过" }] }) });
 
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
-    expect(result).toMatchObject({ status: "error", retryable: false });
-    expect(result.contribution).toBeUndefined();
+    expectTechnicalFailure(result);
     expect(result.error).toContain("correction evidence selection failed");
     expect(reviews).toBe(1);
   });
@@ -211,8 +216,7 @@ describe("stable claim correction patches", () => {
       : initial, knowledge_topic_review: rejectThenAccept("修正文案") });
 
     const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
-    expect(result).toMatchObject({ status: "error", retryable: false });
-    expect(result.contribution).toBeUndefined();
+    expectTechnicalFailure(result);
   });
 
   it("Given replacement permission for an assistant lesson, When the patch selects user evidence, Then authority promotion is rejected", async () => {
@@ -228,8 +232,7 @@ describe("stable claim correction patches", () => {
       : initial, knowledge_topic_review: rejectThenAccept("需要修正主引文", [0]) });
 
     const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
-    expect(result).toMatchObject({ status: "error", retryable: false });
-    expect(result.contribution).toBeUndefined();
+    expectTechnicalFailure(result);
     expect(result.error).toContain("must be equal to one of the allowed values");
   });
 
