@@ -4,7 +4,7 @@
  * numeric placeholders before validation and never enter FlowClaim or publication data.
  */
 import type { LLMTool } from "../../src/utils/provider.js";
-import { authorityViolation } from "./authority-policy.js";
+import { authorityViolation, roleShapedClaim } from "./authority-policy.js";
 import type { CorrectionEvidence } from "./consolidation-quotes.js";
 import { resolveQuote } from "./consolidation-quotes.js";
 import type { CitationRetirement } from "./citation-retirement.js";
@@ -193,9 +193,13 @@ function allowedQuoteIds(catalog: readonly CorrectionEvidence[], allowAssistant:
 }
 
 function sourceRole(entry: StableClaimEntry, catalog: readonly CorrectionEvidence[]): FlowEvidence["kind"] {
-  const role = catalog.find(item => item.id === entry.claim.evidenceId)?.kind;
+  const role = evidenceRole(catalog, entry.claim.evidenceId);
   if (!role) throw new Error(`unknown frozen source for ${entry.claimId}`);
   return role;
+}
+
+function evidenceRole(catalog: readonly CorrectionEvidence[], evidenceId: string): FlowEvidence["kind"] | undefined {
+  return catalog.find(item => item.id === evidenceId)?.kind;
 }
 
 function permittedRoles(current: FlowEvidence["kind"], mayChange: boolean): FlowEvidence["kind"][] {
@@ -271,8 +275,10 @@ function resolveEntryUpdate(entry: StableClaimEntry, update: ClaimUpdate | undef
   const evidence = resolveUpdatedEvidence(entry, changes, permissions, catalog);
   const fields = omitPatchReferences(changes);
   const page = correctionTargetPage(fields.targetPageId ?? entry.claim.targetPageId, frozenPages);
-  const claim = { ...entry.claim, ...fields, targetPageId: page.pageId, topic: page.topic, decisionObject: page.decisionObject,
+  const updated = { ...entry.claim, ...fields, targetPageId: page.pageId, topic: page.topic, decisionObject: page.decisionObject,
     evidenceId: evidence.primary.evidenceId, quote: evidence.primary.quote, supportingQuotes: evidence.supportingQuotes };
+  // A reviewer-permitted source change settles the claim's authority; the program applies the shape that source permits.
+  const claim = evidence.primaryChanged ? roleShapedClaim(updated, evidence.primary.role) : updated;
   assertAuthorityCompatible(claim, evidence.primary.evidenceId, catalog, entry.claimId);
   return { claimId: entry.claimId, claim, quoteId: evidence.primaryQuoteId, supportingQuoteIds: evidence.supportingQuoteIds };
 }
@@ -289,11 +295,15 @@ function resolveUpdatedEvidence(entry: StableClaimEntry, changes: Record<string,
   }
   const primary = resolveQuote(catalog, primaryQuoteId);
   assertNoAuthorityPromotion(entry, primary.evidenceId, catalog, changed);
-  const supportingQuotes = supportingQuoteIds.map(quoteId => {
+  const primaryChanged = entry.quoteId !== primaryQuoteId;
+  // Assistant support inherited from a user primary lends nothing once the primary itself is no longer the user.
+  const keptSupports = primaryChanged && primary.role !== "user"
+    ? supportingQuoteIds.filter(quoteId => resolveQuote(catalog, quoteId).role !== "assistant") : supportingQuoteIds;
+  const supportingQuotes = keptSupports.map(quoteId => {
     const quote = resolveQuote(catalog, quoteId);
     return { evidenceId: quote.evidenceId, quote: quote.quote };
   });
-  return { primaryQuoteId, primary, supportingQuotes, supportingQuoteIds };
+  return { primaryQuoteId, primary, primaryChanged, supportingQuotes, supportingQuoteIds: keptSupports };
 }
 
 function correctionTargetPage(targetPageId: string | null | undefined, pages: readonly PlannedPage[]): PlannedPage {
@@ -329,15 +339,14 @@ function omitPatchReferences(fields: Record<string, unknown>): Partial<FlowClaim
 function assertNoAuthorityPromotion(entry: StableClaimEntry, nextEvidenceId: string, catalog: readonly CorrectionEvidence[], changed: boolean): void {
   if (!changed) return;
   const previousRole = sourceRole(entry, catalog);
-  const nextRole = catalog.find(item => item.id === nextEvidenceId)?.kind;
+  const nextRole = evidenceRole(catalog, nextEvidenceId);
   if (!nextRole || ROLE_AUTHORITY[nextRole] > ROLE_AUTHORITY[previousRole]) {
     throw new Error(`correction cannot promote source authority for ${entry.claimId}`);
   }
 }
 
 function assertAuthorityCompatible(claim: FlowClaim, evidenceId: string, catalog: readonly CorrectionEvidence[], claimId: string): void {
-  const role = catalog.find(item => item.id === evidenceId)?.kind;
-  const violation = authorityViolation(claim, role);
+  const violation = authorityViolation(claim, evidenceRole(catalog, evidenceId));
   if (violation) throw new Error(`correction cannot promote ${correctionAuthorityLabels[violation]} for ${claimId}`);
 }
 
