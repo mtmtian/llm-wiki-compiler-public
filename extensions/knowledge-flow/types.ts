@@ -138,18 +138,20 @@ export interface ClaimReview {
 
 /** Result returned to the host route. */
 export interface FlowResult {
-  status: "published" | "submitted" | "empty" | "needs_review" | "error";
+  status: "published" | "submitted" | "empty" | "needs_review" | "deferred" | "error";
   publishedPageIds: string[];
   reviewCount: number;
   candidateIds?: string[];
   reviewFile?: string;
   error?: string;
+  /** False ends an invalid frozen attempt; omitted errors retain the host's bounded execution retry. */
+  retryable?: boolean;
   submissionId?: string;
   contribution?: { claims: FlowClaim[]; evidence: FlowEvidence[]; topicRevisions?: TopicRevision[] };
   sessionMemory?: { summary: string; topicPageIds: string[] };
   /** Per-claim conclusions of every review attempt in this batch; observation only until the ledger gate. */
   claimReviews?: ClaimReview[];
-  /** A held batch's accepted claims; the host publishes them as one ledger record when the gate is enabled. */
+  /** Accepted claims from an unfinished page; terminal failure or hold preserves their ledger publication. */
   ledgerContribution?: { claims: FlowClaim[]; evidence: FlowEvidence[] };
 }
 

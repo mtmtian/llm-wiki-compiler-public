@@ -16,10 +16,10 @@ async function expectSubmittedSession(runtime: FlowConfig) {
   return result;
 }
 
-async function expectHeldDraft(changed: TopicDraft, reason: RegExp, input = job()): Promise<void> {
+async function expectFailedDraft(changed: TopicDraft, reason: RegExp, input = job()): Promise<void> {
   const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: changed, knowledge_topic_review: accepted() });
   const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
-  expect(result).toMatchObject({ status: "needs_review", error: expect.stringMatching(reason) });
+  expect(result).toMatchObject({ status: "error", retryable: false, error: expect.stringMatching(reason) });
   expect(result.contribution).toBeUndefined();
 }
 
@@ -101,15 +101,15 @@ describe("whole-session topic consolidation", () => {
     const runtime = config({ knowledge_topic_plan: plan() });
     const result = await consolidateSession(job(), runtime,
       new Map([[pageId, original.replace("projectId: companion", "projectId: other")]]));
-    expect(result).toMatchObject({ status: "needs_review", error: expect.stringMatching(/project/) });
+    expect(result).toMatchObject({ status: "error", retryable: false, error: expect.stringMatching(/project/) });
     expect(result.contribution).toBeUndefined();
   });
 
-  it("Given a cached acceptance missing page review, Then holds it durably instead of retrying the same failure", async () => {
+  it("Given a cached acceptance missing page review, Then records invalid output instead of retrying the same failure", async () => {
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: draft(),
       knowledge_topic_review: { ...accepted(), checkedPageIds: [] } });
     const first = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
-    expect(first).toMatchObject({ status: "needs_review", error: expect.stringMatching(/omitted/) });
+    expect(first).toMatchObject({ status: "error", retryable: false, error: expect.stringMatching(/omitted/) });
     expect(first.contribution).toBeUndefined();
     const unavailable = config({}).provider;
     expect(await consolidateSession(job(), { ...runtime, provider: unavailable, reviewer: unavailable }, new Map([[pageId, original]]))).toEqual(first);
@@ -156,7 +156,7 @@ describe("whole-session topic consolidation", () => {
 
   it("Given a draft deleting historical citations, Then rejects it before publication", async () => {
     const changed = draft(); changed.pages[0].body = "## 当前结论\n预算28个虚构单位。{{claim:0}}";
-    await expectHeldDraft(changed, /citation/);
+    await expectFailedDraft(changed, /citation/);
   });
 
   it("Given an explicit evidence retirement, Then acceptance requires independent review of that retirement", async () => {
@@ -171,19 +171,19 @@ describe("whole-session topic consolidation", () => {
   it("Given an otherwise accepted edit without retirement review coverage, Then it stays unpublished", async () => {
     const changed = draft(); changed.pages[0].body = "## 当前结论\n预算调整及条件 {{claim:0}}";
     changed.pages[0].citationRetirements = [{ citation: "^[old.md:1]", reason: "新决定承接原条件。", replacement: "{{claim:0}}" }];
-    await expectHeldDraft(changed, /review omitted an evidence retirement/);
+    await expectFailedDraft(changed, /review omitted an evidence retirement/);
   });
 
   it("Given a model invents a GitHub process reference, Then a retirement is held before publishing", async () => {
     const changed = draft(); const invented = "https://github.com/example/wiki/pull/99";
     changed.pages[0].body = `## 当前结论\n预算调整及条件 {{claim:0}}\n\n过程见 ${invented}`;
     changed.pages[0].citationRetirements = [{ citation: "^[old.md:1]", reason: "旧记录移交外部。", replacement: invented }];
-    await expectHeldDraft(changed, /not supported by original evidence/);
+    await expectFailedDraft(changed, /not supported by original evidence/);
   });
 
   it("Given a hallucinated exact quote, Then cannot publish even if a reviewer would approve", async () => {
     const changed = draft(); changed.claims[0].quote = "伪造预算280个虚构单位";
-    await expectHeldDraft(changed, /evidence/);
+    await expectFailedDraft(changed, /evidence/);
   });
 
   it("Given a saved model result, When the process resumes without a provider, Then recovers the same contribution", async () => {
@@ -212,7 +212,7 @@ describe("whole-session topic consolidation", () => {
   it("Given a session summary alone, Then cannot use it in place of the missing original proposal", async () => {
     const changed = draft();
     changed.claims[0].supportingQuotes = [{ evidenceId: "summary", quote: "正在讨论样例素材测试预算。" }];
-    await expectHeldDraft(changed, /evidence/);
+    await expectFailedDraft(changed, /evidence/);
   });
 
   it("Given a saved specification labeled as a decision, Then it becomes a historical fact that still requires independent review", async () => {
@@ -250,14 +250,14 @@ describe("whole-session topic consolidation", () => {
     expect(result.contribution?.topicRevisions?.[0].citationRetirements?.[0].replacement).toBe("{{claim:0}}");
   });
 
-  it("Given an invalid retirement literal in both drafts, When correction repeats it, Then the bounded run holds with the concrete schema failure", async () => {
+  it("Given an invalid retirement literal in both drafts, When correction repeats it, Then the bounded run fails with the concrete schema failure", async () => {
     const invalid = draft(); invalid.pages[0].body = "## 当前结论\n预算调整 {{claim:0}}";
     invalid.pages[0].citationRetirements = [{ citation: "^[old.md:1]", reason: "旧过程结束",
       replacement: "{{claim:0}}、{{claim:2}}" }];
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: (request: { correction?: unknown }) => request.correction ? invalid : invalid,
       knowledge_topic_review: accepted() });
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
-    expect(result).toMatchObject({ status: "needs_review", error: expect.stringMatching(/correction evidence selection failed|pattern/) });
+    expect(result).toMatchObject({ status: "error", retryable: false, error: expect.stringMatching(/correction evidence selection failed|pattern/) });
     expect(result.contribution).toBeUndefined();
   });
 
@@ -312,7 +312,8 @@ describe("whole-session topic consolidation", () => {
     } });
     await rm(path.join(runtime.wikiRoot, "sources/old.md"));
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
-    expect(result.status).toBe("needs_review");
+    expect(result.status).toBe("error");
+    expect(result.retryable).toBeUndefined();
     expect(result.error).toMatch(/ENOENT|source/);
   });
 

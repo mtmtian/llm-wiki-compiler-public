@@ -9,6 +9,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from admission_usage import can_admit_runnable, intake_lock
 
 from common import digest, inside, load_json, page_ids, save_json
 from routing import eligible_repo
@@ -103,7 +104,7 @@ def immutable_write(path, value):
 def export_result(config, job, result):
     """Export reviewed quote-only knowledge, leaving complete evidence private."""
     exchange = settings(config)
-    if result.get("status") == "needs_review" and "ledgerContribution" in result:
+    if result.get("status") in ("needs_review", "error") and "ledgerContribution" in result:
         from replica import publish_ledger
         return publish_ledger(config, job, result)
     if result.get("status") != "submitted":
@@ -187,13 +188,10 @@ def import_pending(config):
     if exchange.get("protocolVersion") == 2 and legacy_importer(exchange) != config.get("machineId"):
         return 0
     state = Path(config["stateDir"])
-    capacity = max(0, config.get("maxQueuedJobs", 30) - len(list((state / "queue").glob("*.json"))))
     imported = 0
     for machine in exchange["participants"]:
         folder = Path(exchange["root"]) / "submissions" / machine
         for path in sorted(folder.glob("*.json")):
-            if imported >= capacity:
-                return imported
             try:
                 packet = read_packet(path, machine, exchange)
                 imported += queue_packet(packet, config)
@@ -214,13 +212,22 @@ def queue_packet(packet, config):
             return 0
     if valid_receipt(root / "receipts" / (packet["id"] + ".json"), packet["id"], config):
         return 0
-    completed = load_json(state / "completed" / (identifier + ".json"))
+    job = incoming_job(packet, config)
+    completed = None
+    with intake_lock(config):
+        completed = load_json(state / "completed" / (identifier + ".json"))
+        if completed:
+            pass
+        elif ((state / "queue" / (identifier + ".json")).exists()
+              or (state / "failed" / (identifier + ".json")).exists()):
+            return 0
+        elif not can_admit_runnable(state, config.get("maxQueuedJobs", 30)):
+            return 0
+        else:
+            save_json(state / "queue" / (identifier + ".json"), job)
     if completed:
         write_receipt(config, {"id": identifier}, completed)
         return 0
-    if (state / "queue" / (identifier + ".json")).exists() or (state / "failed" / (identifier + ".json")).exists():
-        return 0
-    save_json(state / "queue" / (identifier + ".json"), incoming_job(packet, config))
     return 1
 
 

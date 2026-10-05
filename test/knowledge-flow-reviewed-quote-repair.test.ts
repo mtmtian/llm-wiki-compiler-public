@@ -130,7 +130,9 @@ describe("reviewed quote repair", () => {
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_edit: () => { edits += 1; return changed; },
       knowledge_topic_review: () => reviewForTwo([{ claimIndex: 0, decision: "reject" }, { claimIndex: 1, decision: "accept" }],
         [{ claimIndex: 0, quoteId: "q-not-in-the-frozen-catalog" }]) });
-    await expect(consolidateSession(input, runtime, new Map([[pageId, original]]))).rejects.toThrow(/quoteId.*allowed value/);
+    await expect(consolidateSession(input, runtime, new Map([[pageId, original]]))).resolves.toMatchObject({
+      status: "error", retryable: false, error: expect.stringMatching(/quoteId.*allowed value/),
+    });
     expect(edits).toBe(1);
   });
 
@@ -149,7 +151,7 @@ describe("reviewed quote repair", () => {
       } });
 
     const result = await consolidateSession(input, runtime, new Map([[pageId, original]]));
-    expect(result).toMatchObject({ status: "needs_review" });
+    expect(result).toMatchObject({ status: "error", retryable: false });
     expect(result.contribution).toBeUndefined();
     expect(reviews).toBe(2);
   });

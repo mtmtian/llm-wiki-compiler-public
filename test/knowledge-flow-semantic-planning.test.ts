@@ -254,7 +254,7 @@ describe("semantic topic planning", () => {
     runtime.provider = provider;
     runtime.reviewer = provider;
     const result = await processJob(input, runtime);
-    expect(result).toMatchObject({ status: "needs_review", error: expect.stringMatching(/semantic topic context exceeds 120000/) });
+    expect(result).toMatchObject({ status: "error", retryable: false, error: expect.stringMatching(/semantic topic context exceeds 120000/) });
     expect(calls).toEqual(["knowledge_topic_plan"]);
   });
 

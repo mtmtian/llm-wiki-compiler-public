@@ -10,7 +10,7 @@ from pathlib import Path
 from common import config_from, page_ids, save_json
 from semantic_scope import CAPABILITY, activate, readiness, require_ready, require_publication
 from hooks import prepare_session_job
-from queue_worker import _batch_key, _merge_batch
+from queue_batch import batch_key as _batch_key, merge_batch as _merge_batch
 
 
 class SemanticScopeTests(unittest.TestCase):

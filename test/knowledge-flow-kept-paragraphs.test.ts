@@ -53,14 +53,14 @@ describe("kept paragraphs", () => {
     expect(result.contribution?.topicRevisions?.[0].body).toContain("当前模拟预算 12 个虚构单位。^[old.md:1]");
   });
 
-  it("Given an inline placeholder in both attempts, When consolidated, Then the correction names it and the batch is held", async () => {
+  it("Given an inline placeholder in both attempts, When consolidated, Then the correction names it and the batch fails", async () => {
     const inline = keptHistory.replace("{{keep:P1}}", "此前预算见 {{keep:P1}}。");
     let reason = "";
     const runtime = config({ knowledge_topic_plan: plan(), knowledge_topic_review: accepted(),
       knowledge_topic_edit: (request: any) => { reason = request.correction?.reason ?? reason; return drafted(inline); } });
     const result = await consolidateSession(job(), runtime, new Map([[pageId, original]]));
     expect(reason).toContain("kept paragraph placeholder {{keep:P1}} was not expanded");
-    expect(result.status).toBe("needs_review");
+    expect(result).toMatchObject({ status: "error", retryable: false });
     expect(result.error).toContain("{{keep:P1}}");
   });
 

@@ -6,37 +6,11 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from common import load_json, save_json
 from exchange import settings, valid_receipt
 from queue_schedule import iso as _iso, parse_time as _parse_time
-
-
-def replay_completed(config: dict[str, Any], now: dt.datetime, finalize: Callable,
-                    mark_retry: Callable) -> tuple[int, int]:
-    """Replay durable results without invoking the model a second time."""
-    recovered, errors = 0, 0
-    state = Path(config["stateDir"])
-    for path in sorted((state / "batches").glob("*.json")):
-        audit = None
-        try:
-            audit = load_json(path)
-            if not isinstance(audit, dict):
-                continue
-            due = _parse_time(audit.get("nextFinalizeAt"))
-            if audit.get("status") in ("result-ready", "finalize-retry") and (not due or due <= now):
-                finalize(config, audit)
-                recovered += len(audit.get("queueFiles", []))
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
-            if not isinstance(audit, dict):
-                continue
-            try:
-                mark_retry(path, audit, now, config, error)
-                errors += 1
-            except (OSError, ValueError, TypeError):
-                continue
-    return recovered, errors
 
 
 def reconcile_receipts(config: dict[str, Any], state: Path) -> int:
@@ -94,7 +68,8 @@ def move_terminal_source(state: Path, path: Path, job: dict[str, Any]) -> None:
 def terminal_source(path: Path, state: Path, job: dict[str, Any]) -> bool:
     """Return whether a queued source already has terminal failure state."""
     destination = state / "failed" / path.name
-    return (int(job.get("attempts", 0)) >= 3 or job.get("status") in ("oversize", "batch-failed")
+    return (int(job.get("attempts", 0)) >= 3 or job.get("status") in (
+            "oversize", "batch-failed", "capacity-admission-failed", "pipeline-error")
             or destination.is_file())
 
 
@@ -144,10 +119,15 @@ def reconcile_failed_batches(state: Path) -> None:
             fail_batch(state, path, audit)
 
 
-def retry_sources(config, audit_path, audit, selected, now, error, retry_source):
+def retry_sources(config, audit_path, audit, selected, now, error, retry_source,
+                  terminal_result=None):
     """Persist retry intent before source updates, and reconcile interrupted moves."""
     state = Path(config["stateDir"])
-    audit.update(status="retry", error=type(error).__name__)
+    terminal_failure = isinstance(terminal_result, dict)
+    audit.update(status="failure-finalize" if terminal_failure else "retry",
+                 error=type(error).__name__)
+    if terminal_failure:
+        audit.update(result=terminal_result, terminalFailure=True)
     save_json(audit_path, audit)
     try:
         for path, job in selected:
@@ -156,11 +136,22 @@ def retry_sources(config, audit_path, audit, selected, now, error, retry_source)
         present = {path.name for path, _ in selected if path.exists()}
         complete = present == set(audit.get("queueFiles", []))
         terminal = any(terminal_source(path, state, job) for path, job in selected)
-        audit.update(status="failed" if terminal or not complete else "retry",
-                     error=type(interrupted).__name__ if complete else "interrupted-partial",
-                     remainingQueueFiles=sorted(present))
+        if terminal_failure:
+            audit.update(status="failure-finalize", sourceFinalizeError=(
+                type(interrupted).__name__ if complete else "interrupted-partial"),
+                remainingQueueFiles=sorted(present))
+        else:
+            audit.update(status="failed" if terminal or not complete else "retry",
+                         error=type(interrupted).__name__ if complete else "interrupted-partial",
+                         remainingQueueFiles=sorted(present))
         save_json(audit_path, audit)
         raise
+    if terminal_failure:
+        audit["status"] = "failure-finalize"
+        audit.pop("remainingQueueFiles", None)
+        save_json(audit_path, audit)
+        return {"status": "error", "error": type(error).__name__,
+                "jobs": len(selected), "attempted": True}
     audit["status"] = "failed" if any(not path.exists() for path, _ in selected) else "retry"
     save_json(audit_path, audit)
     if audit["status"] == "failed":
@@ -175,7 +166,8 @@ def existing_audit(state: Path, queue_files: list[str]):
             audit = load_json(path)
         except (OSError, ValueError, TypeError):
             continue
-        if (audit.get("status") in ("claimed", "retry", "result-ready", "finalize-retry", "sync-retry")
+        if (audit.get("status") in ("claimed", "retry", "result-ready", "finalize-retry",
+                                    "sync-retry", "capacity-deferred", "failure-finalize")
                 and set(audit.get("queueFiles", [])) == expected):
             return path, audit
     return None

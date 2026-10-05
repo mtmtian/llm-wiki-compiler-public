@@ -86,7 +86,7 @@ class ReviewRetryTests(unittest.TestCase):
         def invoke(_config, _op, payload, _timeout):
             seen.append(payload["job"])
             return {"status": "empty", "publishedPageIds": [], "sessionMemory": {"summary": "done"}}
-        with patch("queue_worker.commit_batch", side_effect=AssertionError("old session cannot regress")):
+        with patch("queue_finalization.commit_batch", side_effect=AssertionError("old session cannot regress")):
             result = process_queue(self.config, invoke, clock=lambda: self.now)
         self.assertEqual(result["processed"], 1)
         self.assertEqual(seen[0]["id"], queued["retryJobId"])
@@ -145,7 +145,7 @@ class ReviewRetryTests(unittest.TestCase):
     def test_changed_durable_retry_cannot_consume_budget_or_publish(self):
         """Given a model failure, changing its frozen audit blocks the next attempt."""
         retry = self.retry()
-        with patch("queue_worker.export_result", side_effect=AssertionError("changed audit exported")):
+        with patch("queue_finalization.export_result", side_effect=AssertionError("changed audit exported")):
             process_queue(self.config, lambda *_: {"status": "error"}, clock=lambda: self.now)
             audit_path = self.state / "batches" / (retry["retryJobId"] + ".json")
             audit = load_json(audit_path)
@@ -239,7 +239,7 @@ class ReviewRetryTests(unittest.TestCase):
         def invoke(_config, _operation, payload, _timeout):
             payload["job"]["allowedPageIds"] = ["concepts/foreign-page"]
             return {"status": "empty"}
-        with patch("queue_worker.export_result", side_effect=AssertionError("changed scope exported")):
+        with patch("queue_finalization.export_result", side_effect=AssertionError("changed scope exported")):
             result = process_queue(self.config, invoke, clock=lambda: self.now)
         self.assertEqual(result["processed"], 0)
         self.assertEqual(load_json(self.state / "review/batch-old.json"), self.review)

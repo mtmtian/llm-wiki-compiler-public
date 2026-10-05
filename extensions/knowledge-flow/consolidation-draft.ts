@@ -18,6 +18,9 @@ export interface TopicDraft {
   summary: string;
 }
 
+/** Valid evidence can still describe an undecided intent requiring human clarification. */
+export class UncertainClaimsError extends Error {}
+
 /** Correction output chooses IDs; source text and destination identity are restored after model output. */
 export type CorrectionClaim = Omit<FlowClaim, "evidenceId" | "quote" | "topic" | "decisionObject" | "supportingQuotes"> & {
   quoteId: string;
@@ -124,11 +127,12 @@ export function validatedDraft(draft: TopicDraft, job: FlowJob, pages: PlannedPa
   const allowed = pages.map(page => page.pageId);
   const diagnostics = diagnoseClaims(draft.claims, job.evidence, allowed, maximum);
   const claims = diagnostics.claims;
+  if (diagnostics.diagnostics.length && diagnostics.diagnostics.every(item => item.code === "uncertain")
+    && claims.length === draft.claims.length) throw new UncertainClaimsError("uncertain claims require confirmed user intent");
   if (diagnostics.diagnostics.length || !claims.length || claims.length !== draft.claims.length) {
     const detail = formatClaimDiagnostics(diagnostics.diagnostics) || "no accepted claims";
     throw new Error(`topic draft claim validation failed: ${detail}`);
   }
-  if (claims.some(claim => claim.status === "uncertain")) throw new Error("topic draft claim validation failed: uncertain claims remain held");
   if (claims.some(claim => claim.kind === "decision" && job.evidence.find(item => item.id === claim.evidenceId)?.kind !== "user")) {
     throw new Error("reference material is not evidence of a user decision");
   }

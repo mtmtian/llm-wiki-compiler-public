@@ -16,6 +16,7 @@ from hooks import invoke, now, process_queue
 from routing import resolve
 from exchange import announce_machine, exchange_status
 from review_capacity import QUEUE_FULL_ERROR
+from current_reviews import current_reviews
 
 STATE_COUNT_DIRS = ("queue", "review", "failed", "audit", "completed", "capture-errors",
                     "capture-pending", "exchange-errors", "replica-errors")
@@ -184,14 +185,22 @@ def audit_status(state):
             "unresolvedQueueFullCount": len(unresolved), "unresolvedQueueFull": unresolved}
 
 
+def active_review_summary(state):
+    """Report only current review lineage heads while counts retain raw files."""
+    return [{"jobId": identifier, "projectId": review.get("projectId")}
+            for identifier, review in current_reviews(state)]
+
+
 def status_snapshot(config):
     """Read persisted health without pruning, synchronizing, consulting Git or writing a snapshot."""
     state = Path(config["stateDir"])
     maintenance = load_json(state / "maintenance.json", None)
     replica = load_json(state / "replica/status.json", None)
+    active_reviews = active_review_summary(state)
     return {"maintenance": ({"at": maintenance.get("at"), "counts": maintenance.get("counts", {})}
                             if isinstance(maintenance, dict) else None),
             "counts": {name: len(list((state / name).glob("*.json"))) for name in STATE_COUNT_DIRS},
+            "activeReviewCount": len(active_reviews), "activeReviews": active_reviews,
             "contextRead": context_read_summary(state), "audit": audit_status(state),
             "replica": replica if isinstance(replica, dict) else None,
             "lastSuccessfulSyncAt": replica.get("lastSuccessfulSyncAt")
@@ -205,7 +214,9 @@ def report(config, evaluate=False):
     counts = {name: len(list((state / name).glob("*.json"))) for name in STATE_COUNT_DIRS}
     reviews = [{"file": str(path), "projectId": load_json(path, {}).get("projectId")}
                for path in sorted((state / "review").glob("*.json"))]
+    active_reviews = active_review_summary(state)
     result = {"at": now(), "counts": counts, "review": reviews,
+              "activeReviewCount": len(active_reviews), "activeReviews": active_reviews,
               "contextRead": context_read_summary(state)}
     if evaluate:
         result["checks"] = checks(config)
