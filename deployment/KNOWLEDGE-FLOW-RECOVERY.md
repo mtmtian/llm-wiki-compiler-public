@@ -51,8 +51,11 @@ rewritten, but the complete resulting diff still requires independent review.
 The stable patch path replaces fuzzy text matching, longest-overlap quote
 recovery and a separate quote-only correction path. It does not replace semantic
 review or infer approval from an assistant report, artifact or unclear assent.
-There is still one editor correction attempt; a case previously repaired without
-an editor call may now need that correction call.
+The editor gets at most one validator-driven and one reviewer-driven correction:
+a draft that first failed program validation is corrected once, and the
+reviewer's first verdict on the valid draft may then permit one more correction
+before the rejection is final. A case previously repaired without an editor
+call may need a correction call.
 
 ## Acceptance and release
 

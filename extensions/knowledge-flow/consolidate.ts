@@ -26,6 +26,9 @@ import { editablePages, pagePublishedAt, withKeptParagraphs } from "./kept-parag
 
 // Durable stage name of the review that checks a draft restricted to its accepted claims.
 const PRUNED_STAGE = "pruned";
+// Edit stages in order: the initial draft, then at most one validator-driven and one reviewer-driven correction.
+// A reviewer-driven correction may follow a validator-driven one, because the reviewer only sees a valid draft.
+const EDIT_STAGES = [undefined, "correction", "recorrection"] as const;
 
 interface TopicReview {
   decision: "accept" | "reject" | "needs_review";
@@ -93,7 +96,7 @@ async function editAndReview(job: FlowJob, config: FlowConfig, context: EditCont
     request: { stateDir: config.stateDir, jobId: job.id, model: config.model, provider }, reviewer,
     correctionCatalog: buildCorrectionEvidence(job.evidence), claimReviews: [], stableClaims: [] };
   let correction: DraftCorrection | undefined;
-  for (const stage of [undefined, "correction"]) {
+  for (const stage of EDIT_STAGES) {
     let outcome: EditStageResult;
     try { outcome = await runEditStage(run, stage, correction); }
     catch (error) { outcome = { result: failed(job, errorMessage(error), context.plan.summary,
@@ -139,7 +142,7 @@ async function validateAndReviewStage(run: EditRunContext, stage: string | undef
     ? { result: held(run.job, outcome.error, draft.summary) } : validationFailure(run, stage, correction, draft, stableClaims, outcome.error);
   const { review, contribution } = outcome;
   if (review.decision === "accept") return { result: acceptedReview(run.job, draft.summary, review, contribution, run.topic.pages) };
-  if (finalRejection(review, stage)) return { result: await acceptedClaimsOnly(run, draft, review) };
+  if (finalRejection(review, correction)) return { result: await acceptedClaimsOnly(run, draft, review) };
   const reviewedClaims = stableClaims;
   try {
     const permissions = correctionPermissionsForReview(reviewedClaims, review);
@@ -289,8 +292,9 @@ function reviewPages(run: EditRunContext): Array<Omit<PlannedPage, "original"> &
   return dated.map(({ original: _original, ...page }) => page);
 }
 
-function finalRejection(review: TopicReview, stage: string | undefined): boolean {
-  return review.decision === "needs_review" || stage === "correction";
+/** The reviewer gets one bounded correction of its own; a draft already corrected for the reviewer is final. */
+function finalRejection(review: TopicReview, correction: DraftCorrection | undefined): boolean {
+  return review.decision === "needs_review" || correction?.review !== undefined;
 }
 
 function acceptedReview(job: FlowJob, summary: string, review: TopicReview,
