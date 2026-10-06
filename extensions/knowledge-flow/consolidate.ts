@@ -5,20 +5,24 @@
  */
 import { CodexAgentProvider } from "../../src/providers/codex-agent.js";
 import type { LLMProvider } from "../../src/utils/provider.js";
-import type { ClaimDecision, ClaimReview, FlowConfig, FlowJob, FlowResult } from "./types.js";
+import type { ClaimReview, FlowConfig, FlowJob, FlowResult } from "./types.js";
 import { claimReview, finishResult } from "./claim-decisions.js";
-import { createPlanTool, createQuoteBoundEditTool, createTopicReviewTool, planTool } from "./consolidation-schema.js";
+import { createQuoteBoundEditTool, createTopicReviewTool } from "./consolidation-schema.js";
 import { ConsolidationOutputError, durableModel } from "./consolidation-model.js";
-import { assertTopicContextBudget, resolvePlan, topicCatalog } from "./consolidation-plan.js";
-import type { TopicPlan, PlannedPage } from "./consolidation-plan.js";
+import { TopicBodyLimitError, topicCatalog } from "./consolidation-plan.js";
+import type { PlannedPage } from "./consolidation-plan.js";
 import { resolveQuoteBoundDraft, unchangedRevisions, UncertainClaimsError, validatedDraft, withSessionEvidence } from "./consolidation-draft.js";
 import type { QuoteBoundTopicDraft, StableClaimEntry, TopicDraft } from "./consolidation-draft.js";
-import { planningCorrectionPrompt, planningPrompt, planSystem, editSystem, correctionEditSystem, reviewSystem, withTopicScope } from "./consolidation-prompts.js";
+import { editSystem, correctionEditSystem, reviewSystem, withTopicScope } from "./consolidation-prompts.js";
 import { buildCorrectionEvidence } from "./consolidation-quotes.js";
 import { applyCorrectionPatch, correctionPermissionsForReview, createCorrectionPatchTool, stableDraftView } from "./claim-patch.js";
 import type { CorrectionPatch, CorrectionPermissions } from "./claim-patch.js";
 import { quoteContribution } from "./contribution.js";
-import { priorSourceContext } from "./consolidation-sources.js";
+import { prepareConsolidation } from "./consolidation-planning.js";
+import type { EditContext } from "./consolidation-planning.js";
+import { errorMessage, failed, held, memory } from "./consolidation-outcomes.js";
+import { reviewContext } from "./consolidation-review-context.js";
+import type { PreviousReview, TopicReview } from "./consolidation-review-context.js";
 import { validateRetirementReferences } from "./citation-retirement.js";
 import { citationChecklist, unaccountedCitations, withRepairedCitations } from "./citation-repair.js";
 import { withoutRejectedClaims } from "./claim-pruning.js";
@@ -30,64 +34,27 @@ const PRUNED_STAGE = "pruned";
 // A reviewer-driven correction may follow a validator-driven one, because the reviewer only sees a valid draft.
 const EDIT_STAGES = [undefined, "correction", "recorrection"] as const;
 
-interface TopicReview {
-  decision: "accept" | "reject" | "needs_review";
-  reason: string;
-  checkedClaimIndexes: number[];
-  checkedPageIds: string[];
-  checkedRetiredCitations?: string[];
-  /** Optional to the program: nothing depends on it until the ledger gate (claim-decisions.ts). */
-  claimDecisions?: ClaimDecision[];
-  quoteRepairs?: Array<{ claimIndex: number; quoteId: string }>;
-  replaceEvidenceForClaims?: number[];
-}
-
 interface DraftCorrection { reason: string; previousDraft: TopicDraft; stableClaims: StableClaimEntry[];
   permissions: CorrectionPermissions; review?: TopicReview; }
 
 /** Process a bounded increment using durable session context and its complete scoped topic catalog. */
 export async function consolidateSession(input: FlowJob, config: FlowConfig, existing: ReadonlyMap<string, string>): Promise<FlowResult> {
   const job = withSessionEvidence(input);
-  const provider = config.provider ?? new CodexAgentProvider(config.model, { timeoutMs: 180_000 });
-  const request = { stateDir: config.stateDir, jobId: job.id, model: config.model, provider };
-  let plan = await durableModel<TopicPlan>({ ...request, tool: planTool, system: withTopicScope(job, planSystem),
-    prompt: planningPrompt(job, existing), tokens: 5000 });
-  let pages: PlannedPage[];
-  let priorSources: Record<string, string>;
+  const prepared = await prepareConsolidation(job, config, existing);
+  if ("result" in prepared) return prepared.result;
   try {
-    pages = checkedPlan(plan, job, existing);
+    return await editAndReview(job, config, prepared.topic);
   } catch (error) {
-    const reason = errorMessage(error);
+    if (!(error instanceof TopicBodyLimitError)) throw error;
     try {
-      const corrected = await durableModel<{ plan: TopicPlan }>({ ...request, stage: "correction", tool: createPlanTool(job.allowedPageIds), system: withTopicScope(job, planSystem),
-        prompt: planningCorrectionPrompt(job, existing, plan, reason), tokens: 5000 });
-      plan = corrected.plan;
-      pages = checkedPlan(plan, job, existing);
-    } catch (correctionError) {
-      return failed(job, `${reason}; ${errorMessage(correctionError)}`, plan.summary,
-        !(correctionError instanceof ConsolidationOutputError));
+      const recovered = await prepareConsolidation(job, config, existing, { previousPlan: prepared.topic.plan, error });
+      return "result" in recovered ? recovered.result : await editAndReview(job, config, recovered.topic);
+    } catch (recoveryError) {
+      return failed(job, errorMessage(recoveryError), prepared.topic.plan.summary,
+        !(recoveryError instanceof ConsolidationOutputError || recoveryError instanceof TopicBodyLimitError));
     }
   }
-  if (job.topicScope === "semantic") {
-    try { assertTopicContextBudget(existing, pages.map(page => page.pageId)); }
-    catch (error) { return failed(job, errorMessage(error), plan.summary); }
-  }
-  try {
-    priorSources = await priorSourceContext(config.wikiRoot, pages);
-  } catch (error) {
-    return failed(job, errorMessage(error), plan.summary, true);
-  }
-  if (plan.disposition !== "edit") return disposition(plan, job);
-  return editAndReview(job, config, { existing, plan, pages, priorSources });
 }
-
-/** Plan validation is deterministic; model transport failures keep their distinct retry contract. */
-function checkedPlan(plan: TopicPlan, job: FlowJob, existing: ReadonlyMap<string, string>): PlannedPage[] {
-  try { return resolvePlan(plan, job, existing); }
-  catch (error) { throw new ConsolidationOutputError(errorMessage(error)); }
-}
-
-interface EditContext { existing: ReadonlyMap<string, string>; plan: TopicPlan; pages: PlannedPage[]; priorSources: Record<string, string>; }
 
 async function editAndReview(job: FlowJob, config: FlowConfig, context: EditContext): Promise<FlowResult> {
   const provider = config.provider ?? new CodexAgentProvider(config.model, { timeoutMs: 180_000 });
@@ -99,7 +66,9 @@ async function editAndReview(job: FlowJob, config: FlowConfig, context: EditCont
   for (const stage of EDIT_STAGES) {
     let outcome: EditStageResult;
     try { outcome = await runEditStage(run, stage, correction); }
-    catch (error) { outcome = { result: failed(job, errorMessage(error), context.plan.summary,
+    catch (error) {
+      if (error instanceof TopicBodyLimitError) throw error;
+      outcome = { result: failed(job, errorMessage(error), context.plan.summary,
       !(error instanceof ConsolidationOutputError)) }; }
     if (outcome.result) {
       return finishResult(outcome.result, run.claimReviews, { enabled: config.knowledgeLedger === true, reviewed: run.reviewed });
@@ -137,7 +106,9 @@ async function runEditStage(run: EditRunContext, stage: string | undefined,
 
 async function validateAndReviewStage(run: EditRunContext, stage: string | undefined,
   correction: DraftCorrection | undefined, draft: TopicDraft, stableClaims: StableClaimEntry[]): Promise<EditStageResult> {
-  const outcome = await reviewedDraft(run, stage, draft);
+  const previous: PreviousReview | undefined = correction ? { mode: "correction", draft: correction.previousDraft,
+    stableClaims: correction.stableClaims, review: correction.review } : undefined;
+  const outcome = await reviewedDraft(run, stage, draft, previous);
   if ("error" in outcome) return outcome.requiresDecision
     ? { result: held(run.job, outcome.error, draft.summary) } : validationFailure(run, stage, correction, draft, stableClaims, outcome.error);
   const { review, contribution } = outcome;
@@ -155,11 +126,15 @@ async function validateAndReviewStage(run: EditRunContext, stage: string | undef
 type ReviewedDraft = { review: TopicReview; contribution: NonNullable<FlowResult["contribution"]> } | { error: string; requiresDecision?: boolean };
 
 /** Validate a draft and, when it is valid, review it and record the per-claim conclusions. */
-async function reviewedDraft(run: EditRunContext, stage: string | undefined, draft: TopicDraft): Promise<ReviewedDraft> {
+async function reviewedDraft(run: EditRunContext, stage: string | undefined, draft: TopicDraft, previous?: PreviousReview): Promise<ReviewedDraft> {
   let contribution: NonNullable<FlowResult["contribution"]>;
   try { contribution = checkedContribution(draft, run.job, run.topic.pages, run.config.maxProposals, run.topic.priorSources); }
-  catch (error) { return { error: errorMessage(error), requiresDecision: error instanceof UncertainClaimsError }; }
-  const review = await reviewAttempt(run, stage, draft, contribution);
+  catch (error) {
+    // Preserve the initial same-page compression attempt before spending the single replan.
+    if (error instanceof TopicBodyLimitError && (stage || run.topic.attempt)) throw error;
+    return { error: errorMessage(error), requiresDecision: error instanceof UncertainClaimsError };
+  }
+  const review = await reviewAttempt(run, stage, draft, contribution, previous);
   run.claimReviews.push(claimReview(stage, review, contribution.claims.length));
   run.reviewed = contribution;
   return { review, contribution };
@@ -174,11 +149,13 @@ async function acceptedClaimsOnly(run: EditRunContext, draft: TopicDraft, review
     note ? `${review.reason}；只保留已接受的 claim 后${note}` : review.reason, draft.summary);
   const pruned = withoutRejectedClaims(draft, run.claimReviews.at(-1));
   if (!pruned) return heldWith();
+  const previous: PreviousReview = { mode: "accepted_subset", draft, stableClaims: run.stableClaims, review };
+  run.stableClaims = run.stableClaims.filter(entry => pruned.claims.includes(entry.claim));
   // Pages whose claims were all rejected keep their current text, so validation, the fresh review and its
   // coverage apply to the remaining pages. This is the run's last step; the same run keeps the review record.
   run.topic = narrowedTopic(run.topic, pruned);
   let outcome: ReviewedDraft;
-  try { outcome = await reviewedDraft(run, PRUNED_STAGE, pruned); }
+  try { outcome = await reviewedDraft(run, PRUNED_STAGE, pruned, previous); }
   catch (error) {
     if (review.decision === "needs_review") return heldWith(`审核失败：${errorMessage(error)}`);
     return failed(run.job, `${review.reason}；只保留已接受的 claim 后审核失败：${errorMessage(error)}`,
@@ -237,7 +214,7 @@ async function loadDraftModel(run: EditRunContext, stage: string | undefined,
   correction: DraftCorrection | undefined,
   tool: ReturnType<typeof createCorrectionPatchTool> | ReturnType<typeof createQuoteBoundEditTool>): Promise<CorrectionPatch | QuoteBoundTopicDraft> {
   const system = withTopicScope(run.job, stage ? correctionEditSystem : editSystem);
-  return durableModel<CorrectionPatch | QuoteBoundTopicDraft>({ ...run.request, stage, tool, system,
+  return durableModel<CorrectionPatch | QuoteBoundTopicDraft>({ ...run.request, stage: modelStage(run, stage), tool, system,
     prompt: draftPrompt(run, stage, correction), tokens: 12000 });
 }
 
@@ -266,16 +243,22 @@ function restoreDraft(stage: string | undefined, modelDraft: CorrectionPatch | Q
 }
 
 async function reviewAttempt(run: EditRunContext, stage: string | undefined, draft: TopicDraft,
-  contribution: NonNullable<FlowResult["contribution"]>): Promise<TopicReview> {
+  contribution: NonNullable<FlowResult["contribution"]>, previous?: PreviousReview): Promise<TopicReview> {
   const retirementCitations = contribution.topicRevisions?.flatMap(page => page.citationRetirements?.map(item => item.citation) ?? []) ?? [];
   const quoteIds = stage ? [] : run.correctionCatalog.flatMap(item => item.quoteOptions.map(option => option.quoteId));
   const tool = createTopicReviewTool(contribution.claims.length, run.topic.pages.map(page => page.pageId), retirementCitations, quoteIds);
-  return durableModel<TopicReview>({ ...run.request, stage, provider: run.reviewer, tool, system: withTopicScope(run.job, reviewSystem),
+  return durableModel<TopicReview>({ ...run.request, stage: modelStage(run, stage), provider: run.reviewer, tool, system: withTopicScope(run.job, reviewSystem),
     prompt: JSON.stringify({ projectId: run.job.projectId, sourceProjectId: run.job.projectId,
       ...(run.job.topicScope ? { topicScope: run.job.topicScope } : {}), currentTaskContext: run.job.prompt,
       evidence: run.correctionCatalog, catalog: topicCatalog(run.topic.existing),
       existing: reviewExisting(run), priorSources: run.topic.priorSources, plan: run.topic.plan, pages: reviewPages(run),
-      claims: draft.claims, revisions: contribution.topicRevisions }), tokens: 5000 });
+      claims: draft.claims, revisions: contribution.topicRevisions,
+      reviewContext: reviewContext(draft, run.stableClaims, previous) }), tokens: 5000 });
+}
+
+/** Replanning uses independent durable slots; internal correction semantics stay unchanged. */
+function modelStage(run: EditRunContext, stage?: string): string | undefined {
+  return run.topic.attempt ? [run.topic.attempt, stage].filter(Boolean).join("-") : stage;
 }
 
 function reviewExisting(run: EditRunContext): Array<[string, string]> {
@@ -308,8 +291,6 @@ function acceptedReview(job: FlowJob, summary: string, review: TopicReview,
     sessionMemory: memory(job, summary, pages.map(page => page.pageId)) };
 }
 
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : "invalid consolidation output"; }
-
 function checkedContribution(draft: TopicDraft, job: FlowJob, pages: PlannedPage[], maximum: number,
   priorSources: Record<string, string>): NonNullable<FlowResult["contribution"]> {
   const unchanged = unchangedRevisions(draft, pages);
@@ -321,17 +302,6 @@ function checkedContribution(draft: TopicDraft, job: FlowJob, pages: PlannedPage
     ...Object.values(priorSources), ...pages.map(page => page.original ?? "")]);
   if (Buffer.byteLength(JSON.stringify(contribution), "utf8") > 100_000) throw new Error("topic contribution exceeds publication byte budget");
   return contribution;
-}
-
-function held(job: FlowJob, reason: string, summary: string): FlowResult {
-  return { status: "needs_review", publishedPageIds: [], reviewCount: 1, error: reason,
-    sessionMemory: memory(job, `未发布（待审）：${reason}\n${summary}`, []) };
-}
-
-/** Preserve diagnostics and inputs while separating machine failure from a request for user intent. */
-function failed(job: FlowJob, reason: string, summary: string, retryable = false): FlowResult {
-  return { status: "error", publishedPageIds: [], reviewCount: 0, error: reason,
-    ...(retryable === false ? { retryable } : {}), sessionMemory: memory(job, `未发布（技术失败）：${reason}\n${summary}`, []) };
 }
 
 function verifyReviewCoverage(review: TopicReview, count: number, pages: PlannedPage[]): void {
@@ -352,14 +322,4 @@ function verifyRetirementReview(review: TopicReview, contribution: NonNullable<F
   if (checked.length !== expected.size || new Set(checked).size !== expected.size || checked.some(item => !expected.has(item))) {
     throw new Error("independent review omitted an evidence retirement");
   }
-}
-
-function disposition(plan: TopicPlan, job: FlowJob): FlowResult {
-  return { status: plan.disposition === "noop" ? "empty" : "needs_review", publishedPageIds: [],
-    reviewCount: plan.disposition === "needs_review" ? 1 : 0, error: plan.reason, sessionMemory: memory(job, plan.summary, []) };
-}
-
-function memory(job: FlowJob, summary: string, pageIds: string[]): NonNullable<FlowResult["sessionMemory"]> {
-  const retained = (job.sessionContext?.topicPageIds ?? []).filter(id => job.allowedPageIds.includes(id));
-  return { summary, topicPageIds: [...new Set([...retained, ...pageIds])] };
 }

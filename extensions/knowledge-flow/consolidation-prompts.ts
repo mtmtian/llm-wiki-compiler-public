@@ -55,6 +55,9 @@ export const planSystem = DURABLE_KNOWLEDGE_POLICY + taskContextContract + "\n\n
   "Do not summarize artifact-only material as 本次会话决定/用户决定; describe its reference scope without inventing user intent. " +
   "Plan a reference-library topic when the task is to organize references, and keep individual examples as sections. " +
   "The input is a bounded increment of one continuing session, not a new independent task. Reuse matching pages within the applicable scope across sessions. " +
+  "Planning receives a compact catalog, not full page text. Route from its identities, summaries, headings and capacity. The editor and reviewer " +
+  "will receive complete originals and cited sources for the selected pages. You need no filesystem tools; missing full text at this stage " +
+  "alone is not ambiguous user intent and must not produce needs_review. Only a real scope conflict or unresolved intent warrants that disposition. " +
   "Prefer a coherent decision narrative covering goal, options, constraints, rationale, current decision and open questions. " +
   "Several related observations about the same decision belong to paragraphs of one page. A publication does not imply new pages. " +
   "Never name a new page after one dated action or batch (a date such as 2026-09-24 or a batch number such as 0918). When such an action " +
@@ -147,6 +150,15 @@ export const reviewSystem = DURABLE_KNOWLEDGE_POLICY + taskContextContract + EVI
   "a replacement source that raises authority. The editor must still pass a fresh full review. " +
   "The proposed new prose is in revisions; existing contains the BEFORE text, while pages records the frozen destination identities. " +
   "Do not attribute removed before-text to the new draft. " +
+  "reviewContext is program-owned continuity, not source evidence. In correction mode, check the previous findings against the changedPages " +
+  "and claimMapping first, then independently verify the complete proposed pages and all evidence invariants. Previously accepted claims are not evidence " +
+  "and may be rejected for a specific missed defect; explain its exact current span and source mismatch. Do not invent a new task requirement or " +
+  "demand unrelated repairs to unchanged old text. Still reject a newly introduced contradiction or a retained prerequisite that makes the new conclusion unsound. " +
+  "In accepted_subset mode, removed claims were intentionally withheld after rejection. Judge whether the remaining claims form an independently " +
+  "useful, supported publication, not whether it covers the original batch completely. Do not require restoring a withheld claim merely for coverage. " +
+  "Reject dangling references, misleading conclusions, or omitted conditions needed to understand the retained claim; this subset mode never waives " +
+  "source support, authority, date, citation, retirement or routing checks. claimMapping identifies dropped claims by a null current index; " +
+  "return decisions only for the current numeric indexes in claims and revisions. " +
   "Check each report/event date in the new prose against source text. observedAt alone supports 'captured on [date]', never 'reported on [date]' " +
   "or 'took effect on [date]'. If a source has no date, reject an attributed report date even when it matches observedAt; require capture wording " +
   "or omit that date, and retain the otherwise valid source binding. Historical attribution and unverified labels do not excuse an invented date. " +

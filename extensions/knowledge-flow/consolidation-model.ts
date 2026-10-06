@@ -5,6 +5,7 @@ import Ajv from "ajv";
 import { atomicWrite } from "../../src/utils/markdown.js";
 import { sha256Text } from "../../src/connectors/hash.js";
 import type { LLMProvider, LLMTool } from "../../src/utils/provider.js";
+import { TopicBodyLimitError } from "./consolidation-plan.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 
@@ -22,21 +23,36 @@ export async function durableModel<T>(request: { stateDir: string; jobId: string
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   });
+  let output: unknown;
   if (prior !== null) {
     const cached = parsed(prior) as { identity?: string; output?: unknown } | null;
     if (cached?.identity !== identity) throw new ConsolidationOutputError("frozen consolidation inputs changed; new attempt required");
-    return validated<T>(tool, cached.output);
+    output = cached.output;
+  } else output = parsed(await provider.toolCall(system, [{ role: "user", content: prompt }], [tool], tokens));
+  const error = outputError(tool, output);
+  if (error && !(error instanceof TopicBodyLimitError)) throw error;
+  if (prior === null) {
+    // Capacity recovery must resume the same overflow, even after a later transport interruption.
+    await mkdir(folder, { recursive: true, mode: 0o700 });
+    await atomicWrite(file, JSON.stringify({ identity, output }), { confineRoot: request.stateDir });
   }
-  const output = validated<T>(tool, parsed(await provider.toolCall(system, [{ role: "user", content: prompt }], [tool], tokens)));
-  await mkdir(folder, { recursive: true, mode: 0o700 });
-  await atomicWrite(file, JSON.stringify({ identity, output }), { confineRoot: request.stateDir });
-  return output;
+  if (error) throw error;
+  return output as T;
 }
 
-function validated<T>(tool: LLMTool, output: unknown): T {
-  const validate = ajv.compile<T>(tool.input_schema);
-  if (!validate(output)) throw new ConsolidationOutputError(`${tool.name}: ${ajv.errorsText(validate.errors)}`);
-  return output;
+/** Only an otherwise valid edit that exceeds body capacity can enter durable recovery. */
+function outputError(tool: LLMTool, output: unknown): ConsolidationOutputError | TopicBodyLimitError | undefined {
+  const validate = ajv.compile(tool.input_schema);
+  if (!validate(output)) {
+    const overflow = tool.name === "knowledge_topic_edit" && validate.errors?.every(error =>
+      error.keyword === "maxLength" && /^\/pages\/\d+\/body$/.test(error.instancePath));
+    if (overflow) {
+      const index = Number(validate.errors![0].instancePath.split("/")[2]);
+      const page = (output as { pages: Array<{ pageId: string; body: string }> }).pages[index];
+      return new TopicBodyLimitError(page.pageId, page.body.length, "raw");
+    }
+    return new ConsolidationOutputError(`${tool.name}: ${ajv.errorsText(validate.errors)}`);
+  }
 }
 
 /** Keep transport errors outside this boundary; only returned data is classified as invalid output. */
