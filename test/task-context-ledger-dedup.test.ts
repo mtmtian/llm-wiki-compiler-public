@@ -28,6 +28,15 @@ async function retryPage(options: { useWhen?: string; extra?: string; sourceText
   `## 当前存档规则\n${CLAIM_TEXT} ^[retry.md:1]\n\n适用条件：${options.useWhen ?? USE_WHEN}\n\n依据与取舍：${RATIONALE}\n\n${options.extra ?? ""}`);
 }
 
+/** Query overlapping retry evidence while requiring both provenance units. */
+async function queryEquivalentRetry(additionalSource: string, pageExcerpt: string) {
+  await writeReviewedClaims(root.dir, [reviewedClaim({ equivalentPageRefs: [PAGE_REF] })]);
+  await retryPage({ extra: pageExcerpt, sourceSupplement: additionalSource });
+  const result = await query();
+  expect(result.evidence).toHaveLength(2);
+  return result;
+}
+
 describe("page and ledger evidence share one budget", () => {
   it("Given an equivalent published retry, When both origins match, Then the complete selected page spends one slot", async () => {
     await writeReviewedClaims(root.dir, [reviewedClaim({ equivalentPageRefs: [PAGE_REF] })]);
@@ -72,19 +81,13 @@ describe("page and ledger evidence share one budget", () => {
 
   it("Given a section retains another decision too, When overlap is only partial, Then both complete evidence units survive", async () => {
     const additional = "小游戏存档更新前必须完成备份。";
-    await writeReviewedClaims(root.dir, [reviewedClaim({ equivalentPageRefs: [PAGE_REF] })]);
-    await retryPage({ extra: additional + " ^[retry.md:2]", sourceSupplement: additional });
-    const result = await query();
-    expect(result.evidence).toHaveLength(2);
+    const result = await queryEquivalentRetry(additional, `${additional} ^[retry.md:2]`);
     expect(result.evidence.some(item => item.origin !== "ledger" && item.text.includes(additional))).toBe(true);
   });
 
   it.each(["原始材料另有一条补充说明。", CLAIM_TEXT])(
     "Given equivalent prose has an additional cited source, When retrieving, Then its extra provenance stays available: %s", async additional => {
-      await writeReviewedClaims(root.dir, [reviewedClaim({ equivalentPageRefs: [PAGE_REF] })]);
-      await retryPage({ extra: "^[retry.md:2]", sourceSupplement: additional });
-      const result = await query();
-      expect(result.evidence).toHaveLength(2);
+      const result = await queryEquivalentRetry(additional, "^[retry.md:2]");
       expect(result.evidence.some(item => item.origin !== "ledger"
         && item.sources.some(source => source.text === additional))).toBe(true);
     });

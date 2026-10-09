@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Backport upstream 1.4.2's Codex optional-field handling (85c8b8f): strict wire
+  schemas allow omitted metadata as null, then restore the original contract
+  before validation. Required fields and originally valid nulls remain intact;
+  references and dynamic review schemas keep their existing constraints.
+- Backport upstream's Unicode MCP resource reads and page confinement (b4b9839):
+  encoded concept/query slugs round-trip correctly, while page resources and
+  `read_page` reject directory traversal and escaping symlinks. These selective
+  fixes retain the current distribution and host-adapter interfaces.
 - Embedding refreshes require persisted retry budgets, defer work at marker
   capacity, retain eligible same-backend cached vectors, and keep exhausted
   retries stopped across compiles. Lint and status expose quarantine failures.

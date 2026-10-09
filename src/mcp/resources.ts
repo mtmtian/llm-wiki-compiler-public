@@ -20,6 +20,7 @@ import { safeReadFile, parseFrontmatter } from "../utils/markdown.js";
 import { readStateClassified } from "../utils/state.js";
 import { loadPreviousReport, loadHistory } from "../eval/stats.js";
 import { listSelectedSourceFiles } from "../sources/scan.js";
+import { readPageContent } from "../pages/read.js";
 
 /** Standard JSON content block for an MCP resource read result. */
 function jsonContent(uri: URL, payload: unknown): {
@@ -131,7 +132,7 @@ function registerConceptResource(server: McpServer, root: string): void {
       mimeType: "application/json",
     },
     async (uri, { slug }) => ({
-      contents: [jsonContent(uri, await loadPageWithMeta(root, CONCEPTS_DIR, String(slug)))],
+      contents: [jsonContent(uri, await loadPageWithMeta(root, CONCEPTS_DIR, decodeSlug(String(slug))))],
     }),
   );
 }
@@ -148,9 +149,18 @@ function registerQueryResource(server: McpServer, root: string): void {
       mimeType: "application/json",
     },
     async (uri, { slug }) => ({
-      contents: [jsonContent(uri, await loadPageWithMeta(root, QUERIES_DIR, String(slug)))],
+      contents: [jsonContent(uri, await loadPageWithMeta(root, QUERIES_DIR, decodeSlug(String(slug))))],
     }),
   );
+}
+
+/** Decode the percent-encoded page component received from an MCP URI template. */
+function decodeSlug(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /** Source listing: filename, frontmatter (truncation, source URL, etc.). */
@@ -167,14 +177,13 @@ async function listSources(root: string): Promise<Array<Record<string, unknown>>
   return records;
 }
 
-/** Read a single page and return a structured payload (slug, meta, body). */
+/** Read a single confined page and return a structured payload (slug, meta, body). */
 async function loadPageWithMeta(
   root: string,
   dir: string,
   slug: string,
 ): Promise<{ slug: string; meta: Record<string, unknown>; body: string }> {
-  const filePath = path.join(root, dir, `${slug}.md`);
-  const content = await safeReadFile(filePath);
+  const content = await readPageContent(root, dir, slug);
   if (!content) {
     throw new Error(`Page not found: ${dir}/${slug}.md`);
   }
@@ -235,7 +244,7 @@ async function listPagesUnder(
       const slug = f.replace(/\.md$/, "");
       // S13: percent-encode the slug so a page-part containing spaces or `#`
       // (e.g. `Foo #1`) round-trips through the URI rather than truncating at
-      // the `#` fragment delimiter. The read template decodes `{slug}` back.
+      // the `#` fragment delimiter. `decodeSlug` reverses this on read.
       return { uri: `llmwiki://${scheme}/${encodeURIComponent(slug)}`, name: slug };
     });
 
