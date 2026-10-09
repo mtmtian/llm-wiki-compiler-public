@@ -15,8 +15,7 @@ import { openFileNoFollow } from "../utils/no-follow-open.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Ajv from "ajv";
-import { toStrictJsonSchema } from "openai/lib/transform.js";
-import type { JSONSchema } from "openai/lib/jsonschema.js";
+import { dropNullOptionals, toStrictSchema } from "./codex-strict-schema.js";
 import type { LLMMessage, LLMProvider, LLMTool } from "../utils/provider.js";
 import { registerCodexProcess, signalCodexTree } from "./codex-agent-lifecycle.js";
 
@@ -43,54 +42,6 @@ const ENV_ALLOWLIST = [
   "PATHEXT",
 ] as const;
 const ajv = new Ajv({ allErrors: true, strict: false });
-
-/**
- * Visit only child values carried by JSON Schema keywords.
- *
- * Literal payloads such as `enum`, `const`, and `default` are intentionally
- * skipped: an object stored there is data, not another schema node.
- */
-function visitSchemaChildren(node: Record<string, unknown>, visit: (child: unknown) => void): void {
-  const singleSchemaKeywords = [
-    "additionalItems", "additionalProperties", "contains", "else", "if", "not",
-    "propertyNames", "then",
-  ];
-  const arraySchemaKeywords = ["allOf", "anyOf", "items", "oneOf", "prefixItems"];
-  const mapSchemaKeywords = ["$defs", "definitions", "dependentSchemas", "dependencies", "patternProperties", "properties"];
-  for (const keyword of singleSchemaKeywords) visit(node[keyword]);
-  for (const keyword of arraySchemaKeywords) {
-    const children = node[keyword];
-    if (Array.isArray(children)) children.forEach(visit);
-    else if (children !== undefined) visit(children);
-  }
-  for (const keyword of mapSchemaKeywords) {
-    const children = node[keyword];
-    if (!isSchemaRecord(children)) continue;
-    Object.values(children).forEach(visit);
-  }
-}
-
-/** Return whether a value can carry JSON Schema keywords. */
-function isSchemaRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Mark every object schema property as required for Codex's strict wire format. */
-function requireDeclaredProperties(node: unknown, visited = new Set<object>()): void {
-  if (!isSchemaRecord(node) || visited.has(node)) return;
-  visited.add(node);
-  if (isSchemaRecord(node.properties)) {
-    node.required = Object.keys(node.properties);
-  }
-  visitSchemaChildren(node, (child) => requireDeclaredProperties(child, visited));
-}
-
-/** Clone and strictify a provider schema without changing its AJV contract. */
-function codexWireSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  const cloned = structuredClone(schema);
-  requireDeclaredProperties(cloned);
-  return toStrictJsonSchema(cloned as unknown as JSONSchema) as unknown as Record<string, unknown>;
-}
 
 /** Testable resource bounds; production uses the secure defaults above. */
 export interface CodexAgentProviderOptions {
@@ -372,13 +323,14 @@ export class CodexAgentProvider implements LLMProvider {
       throw new CodexAgentError(`Codex CLI requires exactly one structured tool schema; received ${tools.length}.`);
     }
     const schema = tools[0].input_schema;
-    const raw = await this.invoke(buildPrompt(system, messages, true), codexWireSchema(schema));
+    const raw = await this.invoke(buildPrompt(system, messages, true), toStrictSchema(schema));
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
       throw new CodexAgentError("Codex CLI returned invalid JSON for a structured request.");
     }
+    parsed = dropNullOptionals(parsed, schema);
     const validate = ajv.compile(schema);
     if (!validate(parsed)) {
       throw new CodexAgentError(`Codex CLI response failed schema validation: ${ajv.errorsText(validate.errors)}`);

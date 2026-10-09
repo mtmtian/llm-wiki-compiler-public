@@ -254,6 +254,26 @@ describe("error handling", () => {
 
 type ResourceMap = Record<string, { readCallback: (uri: URL) => Promise<{ contents: Array<{ text: string }> }> }>;
 
+/** A templated resource as the SDK registers it: read callback plus URI variables. */
+type ResourceTemplateEntry = {
+  readCallback: (uri: URL, vars: Record<string, string>) => Promise<{ contents: Array<{ text: string }> }>;
+};
+
+/** The `wiki-concept` template, which resolves one page per slug. */
+function conceptTemplate(server: McpServer): ResourceTemplateEntry {
+  return (getRegisteredResourceTemplates(server) as Record<string, ResourceTemplateEntry>)["wiki-concept"];
+}
+
+/** Read a concept page using the SDK's percent-encoded template variable shape. */
+async function readConceptResource(slug: string): Promise<{ slug: string; body: string }> {
+  const encoded = encodeURIComponent(slug);
+  const result = await conceptTemplate(buildServer()).readCallback(
+    new URL(`llmwiki://concept/${encoded}`),
+    { slug: encoded },
+  );
+  return JSON.parse(result.contents[0].text);
+}
+
 /** Read a static resource and return its first content block's raw text. */
 async function readStaticResourceText(uri: string): Promise<string> {
   const server = buildServer();
@@ -312,13 +332,7 @@ describe("MCP resources", () => {
       "Concept body.",
     );
 
-    const server = buildServer();
-    const template = (getRegisteredResourceTemplates(server) as Record<string, { readCallback: (uri: URL, vars: Record<string, string>) => Promise<{ contents: Array<{ text: string }> }> }>)["wiki-concept"];
-    const result = await template.readCallback(
-      new URL("llmwiki://concept/alpha"),
-      { slug: "alpha" },
-    );
-    const parsed = JSON.parse(result.contents[0].text);
+    const parsed = await readConceptResource("alpha");
     expect(parsed).toMatchObject({ slug: "alpha", body: "Concept body." });
   });
 
@@ -344,13 +358,9 @@ describe("MCP resources", () => {
     const slug = "Foo #1";
     await writePage(path.join(root, "wiki/concepts"), slug, { title: "Foo One", summary: "S" }, "Hashy body.");
 
-    const server = buildServer();
-    const template = (getRegisteredResourceTemplates(server) as Record<string, { readCallback: (uri: URL, vars: Record<string, string>) => Promise<{ contents: Array<{ text: string }> }> }>)["wiki-concept"];
-    // The list URI percent-encodes the slug; the read decodes it back to the
-    // raw slug var — `#` does not truncate the page-part at the fragment.
-    const encoded = encodeURIComponent(slug);
-    const result = await template.readCallback(new URL(`llmwiki://concept/${encoded}`), { slug });
-    const parsed = JSON.parse(result.contents[0].text);
+    // The SDK matches the template against the normalized URI, so `{slug}` is
+    // percent-encoded when it reaches the callback.
+    const parsed = await readConceptResource(slug);
     expect(parsed).toMatchObject({ slug, body: "Hashy body." });
   });
 });

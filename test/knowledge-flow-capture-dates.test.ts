@@ -30,6 +30,12 @@ function page(original: string | null = null): PlannedPage {
     basisHash: null, original };
 }
 
+/** Assert that an explicit capture date remains valid evidence attribution. */
+function expectCaptureAttributedDraftToPass(body: string): void {
+  expect(() => assertEvidenceDates(draft(body, [claim("e1", body)]), [page()], [evidence("e1")]))
+    .not.toThrow();
+}
+
 it("Given an unchanged old paragraph, When checking a draft, Then it skips that paragraph", () => {
   const old = "报告于 2025-01-15，旧记录保持原文。{{claim:0}}";
   expect(() => assertEvidenceDates(draft(old, [claim("e1", "旧记录")]),
@@ -68,9 +74,7 @@ it("Given a report date that differs from metadata, When checking the draft, The
 });
 
 it.each(["捕获于", "采集于", "captured on"])("Given capture wording '%s', When checking the draft, Then it accepts observedAt", wording => {
-  const body = `该信息${wording} 2025-01-15。{{claim:0}}`;
-  expect(() => assertEvidenceDates(draft(body, [claim("e1", body)]), [page()], [evidence("e1")]))
-    .not.toThrow();
+  expectCaptureAttributedDraftToPass(`该信息${wording} 2025-01-15。{{claim:0}}`);
 });
 
 it("Given publication wording for updatedAt, When checking the draft, Then it accepts the page date", () => {
@@ -104,8 +108,7 @@ it.each([
 });
 
 it("Given a report explicitly described as captured on the date, Then it accepts that capture attribution", () => {
-  const body = "助手在 2025-01-15 的捕获记录中报告设置改变，本批未独立核验。{{claim:0}}";
-  expect(() => assertEvidenceDates(draft(body, [claim("e1", body)]), [page()], [evidence("e1")])).not.toThrow();
+  expectCaptureAttributedDraftToPass("助手在 2025-01-15 的捕获记录中报告设置改变，本批未独立核验。{{claim:0}}");
 });
 
 it("Given only a supporting quote states the report date, When checking the draft, Then it accepts that source date", () => {
