@@ -67,16 +67,16 @@ export function toStrictSchema(schema: Schema): Schema {
   return toStrictJsonSchema(cloned as JSONSchema) as Schema;
 }
 
-/** Encode a JSON Pointer component; property names are arbitrary JSON keys. */
+/** Encode a JSON Pointer token for a URI fragment; property names are arbitrary JSON keys. */
 function pointer(key: string | number): string {
-  return String(key).replace(/~/g, "~0").replace(/\//g, "~1");
+  return encodeURIComponent(String(key).replace(/~/g, "~0").replace(/\//g, "~1"));
 }
 
 /** Read the original node; AJV's compiled schema may already have resolved a ref. */
 function schemaAt(location: string, validator: Ajv): unknown {
   let node: unknown = validator.getSchema(SCHEMA_ID)?.schema;
   for (const part of location.slice(SCHEMA_ID.length + 1).split("/").slice(1)) {
-    const key = part.replace(/~1/g, "/").replace(/~0/g, "~");
+    const key = decodeURIComponent(part).replace(/~1/g, "/").replace(/~0/g, "~");
     if (Array.isArray(node)) node = node[Number(key)];
     else if (isSchema(node)) node = node[key];
     else return undefined;

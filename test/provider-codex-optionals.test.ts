@@ -79,11 +79,13 @@ it("keeps enum/default payloads literal and allows omission of an optional const
   const schema = { type: "object", properties: {
     payload: { enum: [literal], default: literal },
     fixed: { type: "string", const: "fixed" }, nothing: { type: "null" },
+    "50% off/优惠~note": { type: "string" },
   }, required: ["payload"] };
-  const response = { payload: literal, fixed: null, nothing: null };
+  const response = { payload: literal, fixed: null, nothing: null, "50% off/优惠~note": null };
   const result = await call(schema, response);
   expect(result.output).toEqual({ payload: literal, nothing: null });
   expect(new Ajv({ strict: false }).validate(result.schema as object, response)).toBe(true);
   expect(JSON.stringify(result.schema)).toContain(JSON.stringify(literal));
   expect(schema.properties.payload.default).toEqual(literal);
+  await expect(call(schema, { ...response, "50% off/优惠~note": 42 })).rejects.toThrow(/schema validation/);
 });
