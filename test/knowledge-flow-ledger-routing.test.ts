@@ -1,7 +1,7 @@
 /**
  * With the knowledge ledger enabled, a held batch carries the claims its final review accepted
- * (deployment/KNOWLEDGE-LEDGER.md §7.2, step B3b). Only accepted claims and the evidence they cite
- * travel; the batch itself stays held, and every other outcome is unchanged. A held page is first retried
+ * (deployment/KNOWLEDGE-LEDGER.md §7.2, step B3b). Only accepted claims whose primary evidence is a user
+ * message, and the evidence they cite, travel; the batch itself stays held, and every other outcome is unchanged. A held page is first retried
  * with its accepted claims alone (claim-pruning.ts); these scenarios hold that reduced page too.
  */
 import { describe, expect, it } from "vitest";
@@ -29,6 +29,19 @@ function twoClaimDraft(): TopicDraft {
     body: `${base.pages[0].body}\n\n## 复盘\n每周复盘一次。{{claim:1}}`, claimIndexes: [0, 1] }] };
 }
 
+const assistantText = "助手报告：样例素材复盘脚本已运行完毕。";
+
+/** The two-claim batch with its second claim sourced from an assistant report instead of the user. */
+function assistantSourced() {
+  const input = job();
+  input.evidence.push({ id: "assistant-3", kind: "assistant", text: assistantText, sha256: sha256Text(assistantText),
+    observedAt: "2025-01-15T00:01:00Z", locator: "codex://s/t3" });
+  const base = twoClaimDraft();
+  const second = { ...base.claims[1], text: assistantText, evidenceId: "assistant-3", quote: assistantText,
+    kind: "lesson" as const, status: "historical" as const, title: "复盘脚本", slug: "sample-review-script" };
+  return { job: input, draft: { ...base, claims: [base.claims[0], second] } };
+}
+
 const verdict = (claimIndex: number, decision: string) => ({ claimIndex, decision, reason: `claim ${claimIndex} ${decision}` });
 const held = (claimDecisions?: unknown[]) =>
   ({ ...accepted(), checkedClaimIndexes: [0, 1], decision: "needs_review", reason: "页面合并需人工确认",
@@ -37,10 +50,11 @@ const held = (claimDecisions?: unknown[]) =>
 const heldTwice = (claimDecisions: unknown[]) => (request: any) => request.claims.length === 2 ? held(claimDecisions)
   : { ...accepted(), decision: "needs_review", reason: "精简后的页面仍需人工确认", claimDecisions: [verdict(0, "accept")] };
 
-async function consolidate(review: unknown, knowledgeLedger = true): Promise<FlowResult> {
-  const runtime = { ...config({ knowledge_topic_plan: plan(), knowledge_topic_edit: twoClaimDraft(), knowledge_topic_review: review }),
+async function consolidate(review: unknown, knowledgeLedger = true,
+  batch = { job: twoClaimJob(), draft: twoClaimDraft() }): Promise<FlowResult> {
+  const runtime = { ...config({ knowledge_topic_plan: plan(), knowledge_topic_edit: batch.draft, knowledge_topic_review: review }),
     knowledgeLedger };
-  return consolidateSession(twoClaimJob(), runtime, new Map([[pageId, original]]));
+  return consolidateSession(batch.job, runtime, new Map([[pageId, original]]));
 }
 
 describe("partial publication of accepted claims while the batch stays held", () => {
@@ -65,6 +79,19 @@ describe("partial publication of accepted claims while the batch stays held", ()
       expect(result.status).toBe("needs_review");
       expect(result.ledgerContribution).toBeUndefined();
     }
+  });
+
+  it("Given accepted claims from the user and from an assistant report, Then only the user's claim travels with the hold", async () => {
+    const result = await consolidate(held([verdict(0, "accept"), verdict(1, "accept")]), true, assistantSourced());
+    expect(result.status).toBe("needs_review");
+    expect(result.ledgerContribution?.claims.map(claim => claim.text)).toEqual([job().prompt]);
+    expect(result.ledgerContribution?.evidence.map(item => item.kind)).toEqual(["user"]);
+  });
+
+  it("Given only an assistant-sourced claim accepted, Then nothing is published from the hold", async () => {
+    const result = await consolidate(heldTwice([verdict(0, "reject"), verdict(1, "accept")]), true, assistantSourced());
+    expect(result.status).toBe("needs_review");
+    expect(result.ledgerContribution).toBeUndefined();
   });
 
   it("Given an accepted page, Then the whole contribution is submitted as before even if a claim was rejected", async () => {

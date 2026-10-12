@@ -7,6 +7,10 @@
  * its final review accepted, with only the evidence they cite, so the host can publish them
  * as one ledger record while the batch stays held. Ledger records never touch page text, so
  * they need no citation retirement. A missing or incomplete list publishes nothing.
+ *
+ * Only claims whose primary evidence is a user message take this path. Held batches mostly carry
+ * assistant progress and status reports; the user's own decisions, constraints and confirmations
+ * are what a held page should not lose, and assistant-sourced knowledge still waits for its page.
  */
 import type { ClaimDecision, ClaimReview, FlowResult } from "./types.js";
 
@@ -43,11 +47,12 @@ export function finishResult(result: FlowResult, reviews: readonly ClaimReview[]
   return { ...recorded, ledgerContribution, error: recorded.error ? `${recorded.error}；${note}` : note };
 }
 
-/** The accepted claims of a complete review, with only the evidence they cite. */
+/** The accepted, user-sourced claims of a complete review, with only the evidence they cite. */
 function acceptedClaims(contribution: Contribution, review: ClaimReview | undefined): FlowResult["ledgerContribution"] {
   if (!review?.complete) return undefined;
   const accepted = new Set(review.claims.filter(item => item.decision === "accept").map(item => item.claimIndex));
-  const claims = contribution.claims.filter((_, index) => accepted.has(index));
+  const userEvidence = new Set(contribution.evidence.filter(item => item.kind === "user").map(item => item.id));
+  const claims = contribution.claims.filter((claim, index) => accepted.has(index) && userEvidence.has(claim.evidenceId));
   if (!claims.length) return undefined;
   const cited = new Set(claims.flatMap(claim => [claim.evidenceId, ...(claim.supportingQuotes ?? []).map(item => item.evidenceId)]));
   return { claims, evidence: contribution.evidence.filter(item => cited.has(item.id)) };
